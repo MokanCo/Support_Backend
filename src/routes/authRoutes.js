@@ -66,6 +66,12 @@ const router = Router();
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  */
+router.get('/login', (_req, res) => {
+  res
+    .status(405)
+    .set('Allow', 'POST')
+    .json({ success: false, message: 'Use POST /api/auth/login with JSON body { email, password }' });
+});
 router.post('/login', loginValidators, validateRequest, authController.login);
 
 /**
