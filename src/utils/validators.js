@@ -1,4 +1,5 @@
 import { body, param, query } from 'express-validator';
+import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
 import { USER_ROLES } from '../models/User.js';
 import { TICKET_STATUSES, TICKET_PRIORITIES } from '../models/Ticket.js';
 
@@ -85,7 +86,7 @@ export const listTicketsQueryValidators = [
   query('overdue').optional().isIn(['0', '1']),
   query('search').optional().isString(),
   query('page').optional().isInt({ min: 1 }),
-  query('pageSize').optional().isInt({ min: 1, max: 100 }),
+  query('pageSize').optional().isInt({ min: 1, max: MAX_TICKET_LIST_PAGE_SIZE }),
   query('sort').optional().isString(),
   query('order').optional().isIn(['asc', 'desc']),
 ];

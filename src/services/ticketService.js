@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Ticket from '../models/Ticket.js';
+import TicketActivity from '../models/TicketActivity.js';
 import Message from '../models/Message.js';
 import Location from '../models/Location.js';
 import User from '../models/User.js';
@@ -17,6 +18,9 @@ import {
   AUTO_MESSAGE_TICKET_CREATED,
   AUTO_MESSAGE_TICKET_CLOSED,
 } from './messageService.js';
+import { sendTicketCompletedEmails } from './boardMailService.js';
+import { getTicketCompletionMailContext } from './ticketStakeholderEmails.js';
+import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
 
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -235,7 +239,10 @@ export async function listTickets(actor, query) {
   }
 
   const page = Math.max(1, Number(query.page) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+  const pageSize = Math.min(
+    MAX_TICKET_LIST_PAGE_SIZE,
+    Math.max(1, Number(query.pageSize) || 20),
+  );
   let sortField = typeof query.sort === 'string' ? query.sort : 'updatedAt';
   if (sortField === 'ticketCode') sortField = 'ticketId';
   if (!LIST_SORT_FIELDS.includes(sortField)) sortField = 'updatedAt';
@@ -338,6 +345,18 @@ export async function updateTicket(actor, id, patch) {
         console.error('[ticketService] auto closing message failed', e);
       }
     }
+    try {
+      const ctx = await getTicketCompletionMailContext(ticket._id);
+      await sendTicketCompletedEmails({
+        to: ctx.to,
+        ticketRef: ctx.ticketRef,
+        title: ctx.title,
+        locationName: ctx.locationName,
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[ticketService] completion email failed', e);
+    }
   }
   const populated = await Ticket.findById(ticket._id).populate(POPULATE);
   return formatTicketResponse(populated);
@@ -347,6 +366,7 @@ export async function deleteTicket(actor, id) {
   const ticket = await Ticket.findById(id);
   assertCanAccessTicket(actor, ticket);
   await Message.deleteMany({ ticketId: id });
+  await TicketActivity.deleteMany({ ticket: id });
   await Ticket.findByIdAndDelete(id);
   return { ok: true };
 }

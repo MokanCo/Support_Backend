@@ -7,6 +7,7 @@ import ticketRoutes from './routes/ticketRoutes.js';
 import messageRoutes from './routes/messageRoutes.js';
 import conversationRoutes from './routes/conversationRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
+import boardApiRoutes from './routes/boardApiRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { mountSwagger } from './config/swagger.js';
 
@@ -35,6 +36,7 @@ app.use('/api/tickets', ticketRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api', boardApiRoutes);
 
 app.use((_req, _res, next) => {
   next(Object.assign(new Error('Not Found'), { statusCode: 404 }));

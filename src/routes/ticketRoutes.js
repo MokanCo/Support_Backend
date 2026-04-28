@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as ticketController from '../controllers/ticketController.js';
+import * as ticketActivityController from '../controllers/ticketActivityController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { validateRequest } from '../middleware/validate.js';
 import {
@@ -271,6 +272,9 @@ router.post(
  */
 router.post('/', createTicketValidators, validateRequest, ticketController.createTicket);
 router.get('/', listTicketsQueryValidators, validateRequest, ticketController.listTickets);
+
+router.get('/:id/activity', ticketIdParamValidators, validateRequest, ticketActivityController.listTicketActivities);
+router.post('/:id/activity', ticketIdParamValidators, validateRequest, ticketActivityController.appendTicketActivities);
 
 /**
  * @swagger
