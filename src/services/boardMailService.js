@@ -154,3 +154,75 @@ export async function sendTicketCompletedEmails(payload) {
     return false;
   }
 }
+
+/**
+ * Public contact form email.
+ * @param {{
+ *   name: string;
+ *   email: string;
+ *   message: string;
+ *   subject?: string;
+ *   adminEmail?: string;
+ * }} payload
+ */
+export async function sendContactFormEmail(payload) {
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  const transport = getTransport();
+  const to =
+    payload.adminEmail?.trim()
+    || process.env.ADMIN_EMAIL?.trim()
+    || process.env.SMTP_USER?.trim();
+  const subject = payload.subject?.trim() || 'New Support contact form submission';
+
+  if (!to) return false;
+
+  const safeName = escapeHtml(payload.name);
+  const safeEmail = escapeHtml(payload.email);
+  const safeMessage = escapeHtml(payload.message);
+  const safeSubject = escapeHtml(subject);
+
+  const text = [
+    'New contact form submission',
+    '',
+    `Name: ${payload.name}`,
+    `Email: ${payload.email}`,
+    `Subject: ${subject}`,
+    '',
+    'Message:',
+    payload.message,
+  ].join('\n');
+
+  const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:16px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:20px 24px;border-radius:8px;border:1px solid #e5e5e5;">
+    <p style="margin:0 0 12px;font-size:18px;font-weight:600;">New contact form submission</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Name</strong><br>${safeName}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Email</strong><br>${safeEmail}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Subject</strong><br>${safeSubject}</p>
+    <p style="margin:0;font-size:14px;color:#555;white-space:pre-wrap;"><strong>Message</strong><br>${safeMessage}</p>
+  </div>
+</body>
+</html>`;
+
+  if (!transport) {
+    console.info('[mail] Contact form (no SMTP):', text.replace(/\n/g, ' | '));
+    return false;
+  }
+
+  try {
+    await transport.sendMail({
+      from,
+      to,
+      subject: `[Contact] ${subject}`,
+      text,
+      html,
+      replyTo: payload.email,
+    });
+    return true;
+  } catch (e) {
+    console.error('[mail] contact form send failed', e);
+    return false;
+  }
+}

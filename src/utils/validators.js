@@ -127,3 +127,20 @@ export const listMessagesValidators = [
 export const markThreadReadValidators = [
   body('ticketId').isMongoId().withMessage('Invalid ticketId'),
 ];
+
+export const contactFormValidators = [
+  body('name').isString().trim().notEmpty().isLength({ max: 120 }).withMessage('name is required'),
+  body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
+  body('subject')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 200 })
+    .withMessage('subject must be at most 200 characters'),
+  body('message').isString().trim().notEmpty().isLength({ max: 10000 }).withMessage('message is required'),
+  body('adminEmail')
+    .optional()
+    .isEmail()
+    .withMessage('adminEmail must be a valid email')
+    .normalizeEmail(),
+];

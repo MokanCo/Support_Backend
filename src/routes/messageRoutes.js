@@ -3,12 +3,15 @@ import * as messageController from '../controllers/messageController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { validateRequest } from '../middleware/validate.js';
 import {
+  contactFormValidators,
   createMessageValidators,
   listMessagesValidators,
   markThreadReadValidators,
 } from '../utils/validators.js';
 
 const router = Router();
+
+router.post('/contact', contactFormValidators, validateRequest, messageController.submitContactForm);
 
 router.use(authMiddleware);
 
