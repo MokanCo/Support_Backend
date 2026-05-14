@@ -2,7 +2,7 @@ import Location from '../models/Location.js';
 import { AppError } from '../utils/AppError.js';
 
 /**
- * @param {{ name: string; email: string; phone: string; address: string }} input
+ * @param {{ name: string; email: string; phone: string; address: string; city?: string; state?: string; zip?: string }} input
  */
 export async function createLocation(input) {
   const loc = await Location.create({
@@ -10,6 +10,9 @@ export async function createLocation(input) {
     email: input.email.toLowerCase().trim(),
     phone: input.phone.trim(),
     address: input.address.trim(),
+    city: (input.city ?? '').trim(),
+    state: (input.state ?? '').trim(),
+    zip: (input.zip ?? '').trim(),
   });
   return formatLocation(loc);
 }
@@ -44,6 +47,9 @@ function formatLocation(doc) {
     email: doc.email,
     phone: doc.phone,
     address: doc.address,
+    city: doc.city ?? '',
+    state: doc.state ?? '',
+    zip: doc.zip ?? '',
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };

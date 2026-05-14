@@ -13,6 +13,9 @@ export const createLocationValidators = [
   body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
   body('phone').isString().trim().notEmpty().withMessage('phone is required'),
   body('address').isString().trim().notEmpty().withMessage('address is required'),
+  body('city').optional().isString().trim(),
+  body('state').optional().isString().trim(),
+  body('zip').optional().isString().trim(),
 ];
 
 export const locationIdParamValidators = [

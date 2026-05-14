@@ -156,6 +156,86 @@ export async function sendTicketCompletedEmails(payload) {
 }
 
 /**
+ * @param {{
+ *   to: string;
+ *   assigneeName: string;
+ *   ticketRef: string;
+ *   title: string;
+ *   locationName?: string | null;
+ *   ticketId?: string;
+ * }} payload
+ */
+export async function sendTicketAssignedEmail(payload) {
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  const transport = getTransport();
+  const ref = payload.ticketRef || '—';
+  const subject = `Ticket ${ref} assigned to you`;
+  const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+  const ticketUrl = base && payload.ticketId ? `${base}/dashboard/tickets/${payload.ticketId}` : '';
+
+  const lines = [
+    `Hi ${payload.assigneeName},`,
+    '',
+    `A support ticket has been assigned to you.`,
+    '',
+    `Reference: ${ref}`,
+    `Title: ${payload.title || '—'}`,
+  ];
+  if (payload.locationName) lines.push(`Location: ${payload.locationName}`);
+  if (ticketUrl) lines.push('', `View ticket: ${ticketUrl}`);
+  const text = lines.join('\n');
+
+  const safeName = escapeHtml(payload.assigneeName);
+  const safeRef = escapeHtml(ref);
+  const safeTitle = escapeHtml(payload.title || '—');
+  const safeLoc = payload.locationName ? escapeHtml(payload.locationName) : '';
+  const href = ticketUrl ? escapeHtml(ticketUrl) : '';
+  const buttonBlock = href
+    ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
+  <tr>
+    <td align="left">
+      <a href="${href}" target="_blank" rel="noopener noreferrer"
+        style="display:inline-block;padding:12px 28px;background:#0d6efd;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.2;">
+        View ticket
+      </a>
+    </td>
+  </tr>
+</table>
+<p style="margin:0 0 16px;font-size:13px;color:#666;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+  Or open this link: <a href="${href}" style="color:#0d6efd;">${href}</a>
+</p>`
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
+    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hi <strong>${safeName}</strong>, a support ticket has been assigned to you.</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Reference</strong><br>${safeRef}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Title</strong><br>${safeTitle}</p>
+    ${safeLoc ? `<p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Location</strong><br>${safeLoc}</p>` : ''}
+    ${buttonBlock}
+  </div>
+</body>
+</html>`;
+
+  if (!transport || !payload.to) {
+    // eslint-disable-next-line no-console
+    console.info('[mail] Ticket assigned (no SMTP or recipient):', text.replace(/\n/g, ' | '));
+    return false;
+  }
+  try {
+    await transport.sendMail({ from, to: payload.to, subject, text, html });
+    return true;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[mail] ticket assignment send failed', e);
+    return false;
+  }
+}
+
+/**
  * Public contact form email.
  * @param {{
  *   name: string;

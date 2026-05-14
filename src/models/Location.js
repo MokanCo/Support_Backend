@@ -13,6 +13,9 @@ import mongoose from 'mongoose';
  *         email: { type: string, format: email }
  *         phone: { type: string }
  *         address: { type: string }
+ *         city: { type: string }
+ *         state: { type: string }
+ *         zip: { type: string }
  *         createdAt: { type: string, format: date-time }
  *         updatedAt: { type: string, format: date-time }
  */
@@ -22,6 +25,9 @@ const locationSchema = new mongoose.Schema(
     email: { type: String, required: true, lowercase: true, trim: true },
     phone: { type: String, required: true, trim: true },
     address: { type: String, required: true, trim: true },
+    city: { type: String, default: '', trim: true },
+    state: { type: String, default: '', trim: true },
+    zip: { type: String, default: '', trim: true },
   },
   { timestamps: true },
 );

@@ -18,7 +18,7 @@ import {
   AUTO_MESSAGE_TICKET_CREATED,
   AUTO_MESSAGE_TICKET_CLOSED,
 } from './messageService.js';
-import { sendTicketCompletedEmails } from './boardMailService.js';
+import { sendTicketCompletedEmails, sendTicketAssignedEmail } from './boardMailService.js';
 import { getTicketCompletionMailContext } from './ticketStakeholderEmails.js';
 import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
 
@@ -287,6 +287,7 @@ export async function updateTicket(actor, id, patch) {
   assertCanAccessTicket(actor, ticket);
   assertTicketNotLocked(ticket);
   const previousStatus = ticket.status;
+  const previousAssignedTo = ticket.assignedTo ? String(ticket.assignedTo) : null;
 
   if (patch.locationId !== undefined) {
     assertPartnerUsesOwnLocation(actor, String(patch.locationId));
@@ -358,6 +359,30 @@ export async function updateTicket(actor, id, patch) {
       console.error('[ticketService] completion email failed', e);
     }
   }
+
+  const newAssignedTo = ticket.assignedTo ? String(ticket.assignedTo) : null;
+  if (newAssignedTo && newAssignedTo !== previousAssignedTo) {
+    try {
+      const assignee = await User.findById(ticket.assignedTo).select('email name');
+      if (assignee?.email) {
+        const loc = ticket.locationId
+          ? await Location.findById(ticket.locationId).select('name').lean()
+          : null;
+        await sendTicketAssignedEmail({
+          to: assignee.email,
+          assigneeName: assignee.name,
+          ticketRef: ticket.ticketId ?? String(ticket._id),
+          title: ticket.title,
+          locationName: loc?.name ?? null,
+          ticketId: String(ticket._id),
+        });
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[ticketService] assignment email failed', e);
+    }
+  }
+
   const populated = await Ticket.findById(ticket._id).populate(POPULATE);
   return formatTicketResponse(populated);
 }

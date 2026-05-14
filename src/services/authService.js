@@ -1,5 +1,6 @@
 import bcrypt from 'bcrypt';
 import User from '../models/User.js';
+import Location from '../models/Location.js';
 import { AppError } from '../utils/AppError.js';
 import { signToken } from '../utils/jwt.js';
 
@@ -37,13 +38,31 @@ export async function getMe(userId) {
   if (!user) {
     throw new AppError('User not found', 404);
   }
+
+  let location = null;
+  if (user.locationId) {
+    const loc = await Location.findById(user.locationId).select('name email phone address');
+    if (loc) {
+      location = {
+        id: String(loc._id),
+        name: loc.name ?? '',
+        email: loc.email ?? '',
+        phone: loc.phone ?? '',
+        address: loc.address ?? '',
+      };
+    }
+  }
+
   return {
-    id: String(user._id),
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    locationId: user.locationId ? String(user.locationId) : null,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
+    user: {
+      id: String(user._id),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      locationId: user.locationId ? String(user.locationId) : null,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    },
+    location,
   };
 }

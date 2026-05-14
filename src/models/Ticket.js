@@ -14,7 +14,7 @@ import mongoose from 'mongoose';
  *         description: { type: string }
  *         category: { type: string }
  *         status: { type: string, enum: [in_queue, in_progress, completed, cancelled] }
- *         priority: { type: string, enum: [low, medium, high, urgent] }
+ *         priority: { type: string, enum: [p0, p1, p2, p3, p4] }
  *         progress: { type: integer, minimum: 0, maximum: 100 }
  *         deadline: { type: string, format: date-time, nullable: true }
  *         locationId: { type: string }
@@ -24,7 +24,7 @@ import mongoose from 'mongoose';
  *         updatedAt: { type: string, format: date-time }
  */
 const STATUSES = ['in_queue', 'in_progress', 'completed', 'cancelled'];
-const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
+const PRIORITIES = ['p0', 'p1', 'p2', 'p3', 'p4'];
 
 const ticketSchema = new mongoose.Schema(
   {
@@ -33,7 +33,7 @@ const ticketSchema = new mongoose.Schema(
     description: { type: String, default: '', trim: true },
     category: { type: String, required: true, trim: true },
     status: { type: String, enum: STATUSES, default: 'in_queue', index: true },
-    priority: { type: String, enum: PRIORITIES, default: 'medium' },
+    priority: { type: String, enum: PRIORITIES, default: 'p2' },
     progress: { type: Number, default: 0, min: 0, max: 100 },
     deadline: { type: Date, default: null },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', required: true, index: true },
