@@ -6,7 +6,7 @@ import { roleMiddleware } from '../middleware/roleMiddleware.js';
 const router = Router();
 
 router.use(authMiddleware);
-router.use(roleMiddleware(['admin']));
+router.use(roleMiddleware(['admin', 'support']));
 
 router.get('/inbox', conversationController.inbox);
 

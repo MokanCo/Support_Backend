@@ -3,14 +3,24 @@ import Message from '../models/Message.js';
 import Ticket from '../models/Ticket.js';
 import TicketThreadRead from '../models/TicketThreadRead.js';
 import { AppError } from '../utils/AppError.js';
+import { ticketListScopeForUser } from './accessService.js';
 
 /**
- * Admin inbox: one row per ticket that has messages, latest activity first.
- * @param {{ id: string; role: string }} actor
+ * Admin / support inbox: one row per ticket that has messages, latest activity first.
+ * Support rows are limited to tickets in their list scope (assigned to them).
+ * @param {{ id: string; role: string; locationId: string | null }} actor
  */
 export async function listAdminInbox(actor) {
-  if (actor.role !== 'admin') {
+  if (actor.role !== 'admin' && actor.role !== 'support') {
     throw new AppError('Forbidden', 403);
+  }
+
+  /** @type {Set<string> | null} */
+  let allowedTicketIds = null;
+  if (actor.role === 'support') {
+    const scope = ticketListScopeForUser(actor);
+    const allowed = await Ticket.find(scope).select('_id').lean();
+    allowedTicketIds = new Set(allowed.map((t) => String(t._id)));
   }
 
   const grouped = await Message.aggregate([
@@ -48,6 +58,7 @@ export async function listAdminInbox(actor) {
   const conversations = [];
   for (const g of grouped) {
     const tid = String(g._id);
+    if (allowedTicketIds && !allowedTicketIds.has(tid)) continue;
     const ticket = ticketMap.get(tid);
     if (!ticket) continue;
 

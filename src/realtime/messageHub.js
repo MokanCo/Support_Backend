@@ -13,6 +13,16 @@ export function setSocketIo(server) {
  * @param {string|import('mongoose').Types.ObjectId} ticketId
  * @param {Record<string, unknown>} message Client-shaped message object
  */
+/**
+ * Push a persisted user notification (e.g. ticket status) to one user's inbox room.
+ * @param {string} userId
+ * @param {Record<string, unknown>} notification Client-shaped notification (id, channel, kind, ticketId, title, body, createdAt)
+ */
+export function emitUserNotification(userId, notification) {
+  if (!io || !userId) return;
+  io.to(`user:${String(userId)}`).emit('notification:new', { notification });
+}
+
 export async function emitTicketMessage(ticketId, message) {
   if (!io) return;
   const id = String(ticketId);

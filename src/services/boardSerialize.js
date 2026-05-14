@@ -1,7 +1,25 @@
 import User from '../models/User.js';
 import Ticket from '../models/Ticket.js';
+import TaskComment from '../models/TaskComment.js';
+import { normalizeCardColor, normalizeProgress } from '../utils/boardTaskCardColors.js';
+
+/**
+ * @param {import('mongoose').Types.ObjectId[]} taskIds
+ * @returns {Promise<Record<string, number>>}
+ */
+async function commentCountsByTaskIds(taskIds) {
+  if (!taskIds?.length) return {};
+  const rows = await TaskComment.aggregate([
+    { $match: { taskId: { $in: taskIds } } },
+    { $group: { _id: '$taskId', n: { $sum: 1 } } },
+  ]);
+  return Object.fromEntries(rows.map((r) => [String(r._id), r.n]));
+}
 
 export async function serializeTasksWithUsers(tasks) {
+  const taskIds = tasks.map((t) => t._id);
+  const [commentsMap] = await Promise.all([commentCountsByTaskIds(taskIds)]);
+
   const userIds = new Set();
   for (const t of tasks) {
     if (t.assignedTo) userIds.add(String(t.assignedTo));
@@ -35,7 +53,10 @@ export async function serializeTasksWithUsers(tasks) {
         ? { id: String(t.assignedTo), name: a?.name || 'User', email: a?.email || '' }
         : null,
       priority: t.priority,
-      deadline: t.deadline,
+      cardColor: normalizeCardColor(t.cardColor),
+      progress: normalizeProgress(t.progress),
+      commentCount: commentsMap[String(t._id)] ?? 0,
+      deadline: t.deadline ? new Date(t.deadline).toISOString() : null,
       status: t.status,
       order: t.order,
       createdBy: t.createdBy ? { id: String(t.createdBy), name: c?.name || '' } : null,
