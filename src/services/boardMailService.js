@@ -226,3 +226,67 @@ export async function sendContactFormEmail(payload) {
     return false;
   }
 }
+
+/**
+ * Email when a user is @mentioned in a board task comment.
+ * @param {{
+ *   to: string;
+ *   mentionedName: string;
+ *   authorName: string;
+ *   taskTitle: string;
+ *   commentText: string;
+ *   taskUrl: string;
+ * }} payload
+ */
+export async function sendBoardMentionEmail(payload) {
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  const transport = getTransport();
+  const subject = `${payload.authorName} mentioned you on: ${payload.taskTitle || 'Board task'}`;
+  const text = [
+    `Hi ${payload.mentionedName},`,
+    '',
+    `${payload.authorName} mentioned you in a comment on the board task "${payload.taskTitle || 'Untitled'}".`,
+    '',
+    'Comment:',
+    payload.commentText,
+    '',
+    'Open the task:',
+    payload.taskUrl,
+  ].join('\n');
+
+  const safeTask = escapeHtml(payload.taskTitle);
+  const safeComment = escapeHtml(payload.commentText);
+  const safeUrl = escapeHtml(payload.taskUrl);
+  const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:20px;background:#f4f4f5;font-family:system-ui,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;padding:24px;border-radius:8px;border:1px solid #e5e5e5;">
+    <p style="margin:0 0 12px;font-size:16px;"><strong>${escapeHtml(payload.authorName)}</strong> mentioned you on <strong>${safeTask}</strong>.</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;">Comment</p>
+    <p style="margin:0 0 16px;font-size:14px;white-space:pre-wrap;border-left:3px solid #0d6efd;padding-left:12px;">${safeComment}</p>
+    <a href="${safeUrl}" style="display:inline-block;padding:10px 20px;background:#0d6efd;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">View task</a>
+  </div>
+</body>
+</html>`;
+
+  if (!transport || !payload.to?.trim()) {
+    // eslint-disable-next-line no-console
+    console.info('[mail] Mention (no SMTP or to):', text.replace(/\n/g, ' | '));
+    return false;
+  }
+  try {
+    await transport.sendMail({
+      from,
+      to: payload.to.trim(),
+      subject,
+      text,
+      html,
+    });
+    return true;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[mail] mention send failed', e);
+    return false;
+  }
+}

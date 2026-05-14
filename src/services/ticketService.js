@@ -20,6 +20,7 @@ import {
 } from './messageService.js';
 import { sendTicketCompletedEmails } from './boardMailService.js';
 import { getTicketCompletionMailContext } from './ticketStakeholderEmails.js';
+import { createTicketCompletedStatusNotification, createTicketCreatedAdminNotifications } from './notificationService.js';
 import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
 
 function escapeRegex(s) {
@@ -208,6 +209,12 @@ export async function createTicket(actor, input) {
       console.error('[ticketService] auto welcome message failed', e);
     }
   }
+  try {
+    await createTicketCreatedAdminNotifications(ticket._id);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[ticketService] admin new-ticket notification failed', e);
+  }
   return formatTicketResponse(populated);
 }
 
@@ -356,6 +363,12 @@ export async function updateTicket(actor, id, patch) {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[ticketService] completion email failed', e);
+    }
+    try {
+      await createTicketCompletedStatusNotification(ticket._id);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[ticketService] completion status notification failed', e);
     }
   }
   const populated = await Ticket.findById(ticket._id).populate(POPULATE);

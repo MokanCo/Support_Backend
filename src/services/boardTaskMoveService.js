@@ -10,6 +10,7 @@ import {
   isDoneLikeColumnName,
 } from '../utils/boardColumnTicketMap.js';
 import { sendTaskCompleteEmails, sendTicketCompletedEmails } from './boardMailService.js';
+import { createTicketCompletedStatusNotification } from './notificationService.js';
 import { getTicketCompletionMailContext } from './ticketStakeholderEmails.js';
 
 /**
@@ -166,6 +167,12 @@ export async function moveBoardTask(input) {
           title: ctx.title || String(fresh?.title || ''),
           locationName: ctx.locationName,
         });
+        try {
+          await createTicketCompletedStatusNotification(task.ticketId);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('[boardTaskMove] completion status notification failed', e);
+        }
       } else if (board?.notifyOnCompleteUsers?.length) {
         const to = [...toSet];
         let ticketRef = null;
