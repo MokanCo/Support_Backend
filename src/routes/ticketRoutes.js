@@ -561,6 +561,12 @@ router.delete(
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  */
+router.get(
+  '/:id/chat-header',
+  ticketIdParamValidators,
+  validateRequest,
+  ticketController.getChatHeader,
+);
 router.get('/:id', ticketIdParamValidators, validateRequest, ticketController.getTicket);
 router.patch('/:id', updateTicketValidators, validateRequest, ticketController.updateTicket);
 router.delete('/:id', ticketIdParamValidators, validateRequest, ticketController.deleteTicket);

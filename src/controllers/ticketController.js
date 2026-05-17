@@ -1,4 +1,5 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { buildTicketChatHeaderState } from '../services/ticketChatHeaderService.js';
 import * as ticketService from '../services/ticketService.js';
 
 export const createTicket = asyncHandler(async (req, res) => {
@@ -14,6 +15,11 @@ export const listTickets = asyncHandler(async (req, res) => {
 export const getTicket = asyncHandler(async (req, res) => {
   const ticket = await ticketService.getTicketById(req.user, req.params.id);
   res.status(200).json(ticket);
+});
+
+export const getChatHeader = asyncHandler(async (req, res) => {
+  const chatHeader = await buildTicketChatHeaderState(req.user, req.params.id);
+  res.status(200).json({ chatHeader });
 });
 
 export const updateTicket = asyncHandler(async (req, res) => {

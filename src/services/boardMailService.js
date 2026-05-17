@@ -2,8 +2,8 @@ import {
   dispatchEmail,
   escapeHtml,
   getDefaultFrom,
-  getResendApiKey,
   getSmtpTransport,
+  isMailConfigured,
 } from './mailSender.js';
 import {
   renderBodyParagraph,
@@ -25,7 +25,7 @@ export function getTransport() {
 }
 
 function mailConfigured() {
-  return Boolean(getResendApiKey() || getSmtpTransport());
+  return isMailConfigured();
 }
 
 /**

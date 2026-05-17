@@ -533,7 +533,17 @@ export async function updateTicket(actor, id, patch) {
   }
 
   const populated = await Ticket.findById(ticket._id).populate(POPULATE);
-  return formatTicketResponse(populated);
+  const response = formatTicketResponse(populated);
+
+  if (
+    patch.assignedTo !== undefined ||
+    patch.status !== undefined
+  ) {
+    const { emitTicketChatHeaderUpdate } = await import('../realtime/messageHub.js');
+    void emitTicketChatHeaderUpdate(ticket._id);
+  }
+
+  return response;
 }
 
 export async function deleteTicket(actor, id) {

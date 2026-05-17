@@ -1,5 +1,6 @@
 import Ticket from '../models/Ticket.js';
 import User from '../models/User.js';
+import { buildTicketChatHeaderState } from '../services/ticketChatHeaderService.js';
 
 /** @type {import('socket.io').Server | null} */
 let io = null;
@@ -21,6 +22,31 @@ export function setSocketIo(server) {
 export function emitUserNotification(userId, notification) {
   if (!io || !userId) return;
   io.to(`user:${String(userId)}`).emit('notification:new', { notification });
+}
+
+/**
+ * Push updated chat header (assignee / support team) to everyone in the ticket room.
+ * @param {string|import('mongoose').Types.ObjectId} ticketId
+ */
+export async function emitTicketChatHeaderUpdate(ticketId) {
+  if (!io) return;
+  const id = String(ticketId);
+  try {
+    const ticket = await Ticket.findById(id).select('createdBy').lean();
+    if (!ticket?.createdBy) return;
+    const creator = await User.findById(ticket.createdBy).select('role locationId').lean();
+    if (!creator || creator.role !== 'partner') return;
+    const actor = {
+      id: String(creator._id),
+      role: creator.role,
+      locationId: creator.locationId ? String(creator.locationId) : null,
+    };
+    const chatHeader = await buildTicketChatHeaderState(actor, id);
+    io.to(`ticket:${id}`).emit('ticket:updated', { ticketId: id, chatHeader });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[messageHub] ticket header emit failed', e);
+  }
 }
 
 export async function emitTicketMessage(ticketId, message) {

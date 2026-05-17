@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 
-let smtpTransport;
+let emailTransport;
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
@@ -12,33 +12,52 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-export function getSmtpTransport() {
-  if (smtpTransport !== undefined) return smtpTransport;
-  const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASS?.trim();
-  if (!user || !pass) {
-    smtpTransport = null;
-    return null;
-  }
-  smtpTransport = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user, pass },
-  });
-  return smtpTransport;
-}
-
-export function getDefaultFrom() {
-  return process.env.RESEND_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+/** Render web services block outbound SMTP (587/465). Use Resend (HTTPS) there. */
+export function isRenderDeployment() {
+  return Boolean(
+    process.env.RENDER
+    || process.env.RENDER_SERVICE_ID
+    || process.env.RENDER_SERVICE_NAME,
+  );
 }
 
 export function getResendApiKey() {
   return process.env.RESEND_API_KEY?.trim() || '';
 }
 
+export function getDefaultFrom() {
+  return process.env.RESEND_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+}
+
 function normalizeRecipients(to) {
   if (!to) return [];
   const list = Array.isArray(to) ? to : [to];
   return [...new Set(list.map((e) => String(e).trim()).filter(Boolean))];
+}
+
+function addressToString(addr) {
+  if (!addr) return '';
+  if (typeof addr === 'string') return addr.trim();
+  if (Array.isArray(addr)) {
+    return addr.map(addressToString).filter(Boolean).join(', ');
+  }
+  if (typeof addr === 'object' && addr.address) {
+    const name = addr.name ? String(addr.name).trim() : '';
+    return name ? `${name} <${addr.address}>` : addr.address;
+  }
+  return String(addr).trim();
+}
+
+function recipientsFromMailData(data) {
+  const raw = data.to ?? data.cc ?? data.bcc;
+  if (!raw) return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  return normalizeRecipients(
+    list.map((entry) => {
+      if (typeof entry === 'object' && entry?.address) return entry.address;
+      return addressToString(entry);
+    }),
+  );
 }
 
 async function sendViaResend({ from, to, subject, text, html, replyTo }, timeoutMs) {
@@ -74,20 +93,85 @@ async function sendViaResend({ from, to, subject, text, html, replyTo }, timeout
       const msg = body?.message || body?.error || res.statusText;
       throw new Error(`Resend API ${res.status}: ${msg}`);
     }
-    return true;
+    return { messageId: body?.id || `resend-${Date.now()}`, accepted: recipients };
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function sendViaSmtp(transport, mailOptions, timeoutMs) {
+/** Nodemailer transport that sends via Resend HTTPS API (works on Render). */
+function createResendTransport() {
+  return {
+    name: 'resend-http',
+    version: '1.0.0',
+    send(mail, callback) {
+      const data = mail.data;
+      const from = addressToString(data.from) || getDefaultFrom();
+      const to = recipientsFromMailData(data);
+      const replyTo = addressToString(data.replyTo) || undefined;
+
+      sendViaResend(
+        {
+          from,
+          to,
+          subject: data.subject || '(no subject)',
+          text: data.text,
+          html: data.html,
+          replyTo,
+        },
+        DEFAULT_TIMEOUT_MS,
+      )
+        .then((info) => callback(null, info))
+        .catch((err) => callback(err));
+    },
+  };
+}
+
+function createGmailTransport() {
+  const user = process.env.SMTP_USER?.trim();
+  const pass = process.env.SMTP_PASS?.trim();
+  if (!user || !pass) return null;
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user, pass },
+  });
+}
+
+/**
+ * Single nodemailer transport: Resend (HTTPS) when RESEND_API_KEY is set,
+ * else Gmail locally. Gmail SMTP is disabled on Render (ports blocked).
+ */
+export function getSmtpTransport() {
+  if (emailTransport !== undefined) return emailTransport;
+
+  if (getResendApiKey()) {
+    emailTransport = nodemailer.createTransport(createResendTransport());
+    return emailTransport;
+  }
+
+  if (isRenderDeployment()) {
+    emailTransport = null;
+    return null;
+  }
+
+  emailTransport = createGmailTransport();
+  return emailTransport;
+}
+
+export function isMailConfigured() {
+  if (getResendApiKey()) return true;
+  if (isRenderDeployment()) return false;
+  return Boolean(process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim());
+}
+
+async function sendViaTransport(transport, mailOptions, timeoutMs) {
   let timer;
   try {
     await Promise.race([
       transport.sendMail(mailOptions),
       new Promise((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`SMTP send timed out after ${timeoutMs}ms`)),
+          () => reject(new Error(`Email send timed out after ${timeoutMs}ms`)),
           timeoutMs,
         );
       }),
@@ -98,9 +182,19 @@ async function sendViaSmtp(transport, mailOptions, timeoutMs) {
   }
 }
 
+function mailNotConfiguredError() {
+  if (isRenderDeployment()) {
+    return new Error(
+      'Email on Render requires RESEND_API_KEY (and RESEND_FROM with a verified domain). '
+      + 'Gmail/nodemailer SMTP cannot run on Render — outbound ports 587/465 are blocked. '
+      + 'Sign up at https://resend.com, verify your domain, and add env vars in the Render dashboard.',
+    );
+  }
+  return new Error('Mail not configured (set RESEND_API_KEY or SMTP_USER + SMTP_PASS for local Gmail)');
+}
+
 /**
- * Send email via HTTPS (Resend) when configured, else SMTP.
- * Resend works on Render free tier; SMTP ports 587/465 are blocked there.
+ * Send email via nodemailer (Resend HTTPS transport on Render, Gmail locally).
  */
 export async function dispatchEmail(
   { from, to, subject, text, html, replyTo },
@@ -112,23 +206,16 @@ export async function dispatchEmail(
     throw new Error('No recipients');
   }
 
-  if (getResendApiKey()) {
-    return sendViaResend(
-      { from: mailFrom, to: recipients, subject, text, html, replyTo },
-      timeoutMs,
-    );
-  }
-
   const transport = getSmtpTransport();
   if (!transport) {
-    throw new Error('Mail not configured (set RESEND_API_KEY or SMTP_USER + SMTP_PASS)');
+    throw mailNotConfiguredError();
   }
 
-  return sendViaSmtp(
+  return sendViaTransport(
     transport,
     {
       from: mailFrom,
-      to: recipients.length === 1 ? recipients[0] : recipients.join(', '),
+      to: recipients.length === 1 ? recipients[0] : recipients,
       subject,
       text,
       html,
@@ -140,37 +227,37 @@ export async function dispatchEmail(
 
 /** Startup diagnostics — does not block HTTP. */
 export async function logMailProviderStatus() {
-  const resend = Boolean(getResendApiKey());
-  const smtp = getSmtpTransport();
-
-  if (resend) {
+  if (getResendApiKey()) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Resend API configured (HTTPS — works on Render free tier)');
+    console.info('[mail] Resend API via nodemailer (HTTPS — works on Render)');
     return;
   }
 
-  if (!smtp) {
+  if (isRenderDeployment()) {
     // eslint-disable-next-line no-console
-    console.warn(
-      '[mail] No mail provider configured. Set RESEND_API_KEY (recommended on Render) or SMTP_USER + SMTP_PASS (Gmail).',
+    console.error(
+      '[mail] Render deployment detected but RESEND_API_KEY is missing. '
+      + 'Gmail SMTP will not work (ports 587/465 blocked). Add RESEND_API_KEY and RESEND_FROM in Render env.',
     );
     return;
   }
 
-  if (process.env.RENDER) {
+  const gmail = createGmailTransport();
+  if (!gmail) {
     // eslint-disable-next-line no-console
     console.warn(
-      '[mail] Running on Render without RESEND_API_KEY. Free-tier instances block SMTP ports 587/465 — invites may fail. Add RESEND_API_KEY or upgrade to a paid instance.',
+      '[mail] No mail provider configured. Set RESEND_API_KEY (production/Render) or SMTP_USER + SMTP_PASS (local Gmail).',
     );
+    return;
   }
 
   try {
-    await smtp.verify();
+    await gmail.verify();
     // eslint-disable-next-line no-console
-    console.info('[mail] Gmail (nodemailer) connection verified');
+    console.info('[mail] Gmail (nodemailer) connection verified — local/dev only');
   } catch (e) {
     // eslint-disable-next-line no-console
-    console.error('[mail] SMTP verify failed', e?.message || e);
+    console.error('[mail] Gmail verify failed', e?.message || e);
   }
 }
 
