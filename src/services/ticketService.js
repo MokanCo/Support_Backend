@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Ticket from '../models/Ticket.js';
 import TicketActivity from '../models/TicketActivity.js';
+import TicketInternalNote from '../models/TicketInternalNote.js';
 import Message from '../models/Message.js';
 import Location from '../models/Location.js';
 import User from '../models/User.js';
@@ -10,7 +11,6 @@ import { getNextTicketSequence, formatTicketId } from './counterService.js';
 import {
   assertCanAccessTicket,
   assertPartnerUsesOwnLocation,
-  ticketListFilterForUser,
   ticketListScopeForUser,
 } from './accessService.js';
 import {
@@ -18,13 +18,57 @@ import {
   AUTO_MESSAGE_TICKET_CREATED,
   AUTO_MESSAGE_TICKET_CLOSED,
 } from './messageService.js';
-import { sendTicketCompletedEmails } from './boardMailService.js';
-import { getTicketCompletionMailContext } from './ticketStakeholderEmails.js';
-import { createTicketCompletedStatusNotification, createTicketCreatedAdminNotifications } from './notificationService.js';
+import {
+  sendTicketCompletedEmails,
+  sendTicketAssignedEmail,
+  sendNewPartnerTicketAdminEmail,
+} from './boardMailService.js';
+import {
+  getTicketCompletionMailContext,
+  getAdminNotificationEmails,
+} from './ticketStakeholderEmails.js';
+import {
+  createTicketAssignedNotification,
+  createTicketCompletedStatusNotification,
+  createTicketCreatedAdminNotifications,
+} from './notificationService.js';
 import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
 
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * In-app assignment notification + email to assignee.
+ * @param {import('../models/Ticket.js').default} ticket
+ * @param {import('mongoose').Types.ObjectId | string} assigneeUserId
+ * @param {{ assignedByName?: string | null; locationName?: string | null }} meta
+ */
+async function notifyTicketAssignee(ticket, assigneeUserId, meta = {}) {
+  try {
+    await createTicketAssignedNotification(ticket._id, assigneeUserId, {
+      assignedByName: meta.assignedByName ?? null,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[ticketService] assignment notification failed', e);
+  }
+  try {
+    const assignee = await User.findById(assigneeUserId).select('email name');
+    if (assignee?.email) {
+      await sendTicketAssignedEmail({
+        to: assignee.email,
+        assigneeName: assignee.name,
+        ticketRef: ticket.ticketId ?? String(ticket._id),
+        title: ticket.title,
+        locationName: meta.locationName ?? null,
+        ticketId: String(ticket._id),
+      });
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[ticketService] assignment email failed', e);
+  }
 }
 
 function isOverdueForDisplay(deadline, status) {
@@ -50,11 +94,13 @@ const POPULATE = [
   { path: 'locationId', select: 'name email phone address' },
   { path: 'createdBy', select: 'name email role' },
   { path: 'assignedTo', select: 'name email role' },
+  { path: 'resolutionBy', select: 'name email role' },
 ];
 
-function assertTicketNotLocked(ticket) {
-  if (ticket.progress === 100) {
-    throw new AppError('Ticket progress is 100% and this ticket can no longer be modified', 403);
+function assertTicketEditable(ticket) {
+  if (!ticket) return;
+  if (ticket.status === 'completed' || ticket.status === 'cancelled') {
+    throw new AppError('This ticket is closed and can no longer be edited', 403);
   }
 }
 
@@ -96,6 +142,10 @@ export function formatTicketResponse(ticketDoc) {
     t.assignedTo && typeof t.assignedTo === 'object' && t.assignedTo._id != null
       ? t.assignedTo
       : null;
+  const resolutionByPopulated =
+    t.resolutionBy && typeof t.resolutionBy === 'object' && t.resolutionBy._id != null
+      ? t.resolutionBy
+      : null;
 
   const createdBy = createdByPopulated
     ? String(createdByPopulated._id)
@@ -107,11 +157,18 @@ export function formatTicketResponse(ticketDoc) {
     : t.assignedTo != null
       ? String(t.assignedTo)
       : null;
+  const resolutionBy = resolutionByPopulated
+    ? String(resolutionByPopulated._id)
+    : t.resolutionBy != null
+      ? String(t.resolutionBy)
+      : null;
 
   const deadlineIso = t.deadline ? new Date(t.deadline).toISOString() : null;
   const isOverdue = isOverdueForDisplay(t.deadline, t.status);
   const createdTs = t.createdAt ? new Date(t.createdAt).getTime() : 0;
-  const isNew = createdTs > 0 && Date.now() - createdTs < 24 * 60 * 60 * 1000;
+  const isNewWithin24h = createdTs > 0 && Date.now() - createdTs < 24 * 60 * 60 * 1000;
+  /** "New" only while still in queue; cleared when moved to in progress (or any non-queue status). */
+  const isNew = isNewWithin24h && t.status === 'in_queue';
 
   return {
     id: String(t._id),
@@ -141,6 +198,19 @@ export function formatTicketResponse(ticketDoc) {
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     isNew,
+    resolution: t.resolution != null ? String(t.resolution) : '',
+    completedAt: t.completedAt ? new Date(t.completedAt).toISOString() : null,
+    resolutionBy,
+    resolutionByName:
+      resolutionByPopulated?.name != null ? String(resolutionByPopulated.name) : null,
+    resolutionHistory: Array.isArray(t.resolutionHistory)
+      ? t.resolutionHistory.map((h) => ({
+          body: h.body != null ? String(h.body) : '',
+          authorId: h.authorId != null ? String(h.authorId) : '',
+          authorName: h.authorName != null ? String(h.authorName) : '',
+          createdAt: h.createdAt ? new Date(h.createdAt).toISOString() : null,
+        }))
+      : [],
   };
 }
 
@@ -192,7 +262,7 @@ export async function createTicket(actor, input) {
     description: (input.description ?? '').trim(),
     category: input.category.trim(),
     status: input.status ?? 'in_queue',
-    priority: input.priority ?? 'medium',
+    priority: input.priority ?? 'p2',
     progress,
     deadline: input.deadline ?? null,
     locationId: new mongoose.Types.ObjectId(raw),
@@ -215,6 +285,30 @@ export async function createTicket(actor, input) {
     // eslint-disable-next-line no-console
     console.error('[ticketService] admin new-ticket notification failed', e);
   }
+  if (actor.role === 'partner') {
+    try {
+      const adminEmails = await getAdminNotificationEmails();
+      if (adminEmails.length) {
+        await sendNewPartnerTicketAdminEmail({
+          to: adminEmails,
+          ticketRef: ticket.ticketId ?? String(ticket._id),
+          title: ticket.title,
+          locationName: loc.name ?? null,
+          partnerName: actor.name ?? null,
+          ticketId: String(ticket._id),
+        });
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[ticketService] admin new-ticket email failed', e);
+    }
+  }
+  if (assignedTo) {
+    await notifyTicketAssignee(ticket, assignedTo, {
+      assignedByName: actor.name ?? null,
+      locationName: loc.name ?? null,
+    });
+  }
   return formatTicketResponse(populated);
 }
 
@@ -226,7 +320,10 @@ export async function listTickets(actor, query) {
   /** @type {import('mongoose').FilterQuery<typeof Ticket>} */
   const filter = { ...ticketListScopeForUser(actor) };
 
-  if (query.status) {
+  if (query.newQueue === '1' || query.newQueue === true) {
+    filter.status = 'in_queue';
+    filter.progress = 0;
+  } else if (query.status) {
     filter.status = query.status;
   }
   if (query.priority) {
@@ -292,8 +389,23 @@ export async function getTicketById(actor, id) {
 export async function updateTicket(actor, id, patch) {
   const ticket = await Ticket.findById(id);
   assertCanAccessTicket(actor, ticket);
-  assertTicketNotLocked(ticket);
+  assertTicketEditable(ticket);
   const previousStatus = ticket.status;
+  const previousAssignedTo = ticket.assignedTo ? String(ticket.assignedTo) : null;
+
+  if (patch.status !== undefined && String(patch.status) !== previousStatus) {
+    if (previousStatus === 'completed' || previousStatus === 'cancelled') {
+      throw new AppError('Cannot change status of a closed ticket', 400);
+    }
+  }
+
+  if (patch.progress !== undefined) {
+    const p = Number(patch.progress);
+    if (Number.isNaN(p) || p < 0 || p > 100) {
+      throw new AppError('Progress must be between 0 and 100', 400);
+    }
+    ticket.progress = p;
+  }
 
   if (patch.locationId !== undefined) {
     assertPartnerUsesOwnLocation(actor, String(patch.locationId));
@@ -309,14 +421,6 @@ export async function updateTicket(actor, id, patch) {
   if (patch.category !== undefined) ticket.category = String(patch.category).trim();
   if (patch.status !== undefined) ticket.status = patch.status;
   if (patch.priority !== undefined) ticket.priority = patch.priority;
-
-  if (patch.progress !== undefined) {
-    const p = Number(patch.progress);
-    if (Number.isNaN(p) || p < 0 || p > 100) {
-      throw new AppError('Progress must be between 0 and 100', 400);
-    }
-    ticket.progress = p;
-  }
 
   if (patch.deadline !== undefined) {
     if (patch.deadline === null || patch.deadline === '') {
@@ -340,6 +444,29 @@ export async function updateTicket(actor, id, patch) {
       }
       ticket.assignedTo = assignee._id;
     }
+  }
+
+  if (ticket.status === 'completed' && previousStatus !== 'completed') {
+    if (ticket.progress !== 100) {
+      throw new AppError('Ticket progress must be 100% before marking as completed', 400);
+    }
+    const resText =
+      patch.resolution !== undefined && patch.resolution !== null
+        ? String(patch.resolution).trim()
+        : '';
+    if (!resText) {
+      throw new AppError('Resolution is required when completing a ticket', 400);
+    }
+    ticket.resolution = resText;
+    ticket.completedAt = new Date();
+    ticket.resolutionBy = new mongoose.Types.ObjectId(actor.id);
+    ticket.resolutionHistory = ticket.resolutionHistory || [];
+    ticket.resolutionHistory.push({
+      body: resText,
+      authorId: new mongoose.Types.ObjectId(actor.id),
+      authorName: actor.name ?? 'Staff',
+      createdAt: new Date(),
+    });
   }
 
   await ticket.save();
@@ -371,6 +498,18 @@ export async function updateTicket(actor, id, patch) {
       console.error('[ticketService] completion status notification failed', e);
     }
   }
+
+  const newAssignedTo = ticket.assignedTo ? String(ticket.assignedTo) : null;
+  if (newAssignedTo && newAssignedTo !== previousAssignedTo) {
+    const loc = ticket.locationId
+      ? await Location.findById(ticket.locationId).select('name').lean()
+      : null;
+    await notifyTicketAssignee(ticket, ticket.assignedTo, {
+      assignedByName: actor.name ?? null,
+      locationName: loc?.name ?? null,
+    });
+  }
+
   const populated = await Ticket.findById(ticket._id).populate(POPULATE);
   return formatTicketResponse(populated);
 }
@@ -380,6 +519,7 @@ export async function deleteTicket(actor, id) {
   assertCanAccessTicket(actor, ticket);
   await Message.deleteMany({ ticketId: id });
   await TicketActivity.deleteMany({ ticket: id });
+  await TicketInternalNote.deleteMany({ ticket: id });
   await Ticket.findByIdAndDelete(id);
   return { ok: true };
 }

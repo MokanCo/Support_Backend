@@ -13,18 +13,63 @@ export const createLocationValidators = [
   body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
   body('phone').isString().trim().notEmpty().withMessage('phone is required'),
   body('address').isString().trim().notEmpty().withMessage('address is required'),
+  body('city').optional().isString().trim(),
+  body('state').optional().isString().trim(),
+  body('zip').optional().isString().trim(),
 ];
 
 export const locationIdParamValidators = [
   param('id').isMongoId().withMessage('Invalid location id'),
 ];
 
+export const listLocationsQueryValidators = [
+  query('page').optional().isInt({ min: 1 }),
+  query('pageSize').optional().isInt({ min: 1, max: MAX_TICKET_LIST_PAGE_SIZE }),
+  query('sort').optional().isString(),
+  query('order').optional().isIn(['asc', 'desc']),
+  query('search').optional().isString(),
+];
+
+export const updateLocationValidators = [
+  ...locationIdParamValidators,
+  body('name').optional().isString().trim().notEmpty(),
+  body('email').optional().isEmail().normalizeEmail(),
+  body('phone').optional().isString().trim().notEmpty(),
+  body('address').optional().isString().trim().notEmpty(),
+  body('city').optional().isString().trim(),
+  body('state').optional().isString().trim(),
+  body('zip').optional().isString().trim(),
+  body('isDisabled').optional().isBoolean(),
+];
+
+export const bulkLocationIdsValidators = [
+  body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+  body('ids.*').isMongoId().withMessage('Each id must be a valid Mongo id'),
+];
+
 export const createUserValidators = [
   body('name').isString().trim().notEmpty().withMessage('name is required'),
   body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
-  body('password').isString().isLength({ min: 8 }).withMessage('password must be at least 8 characters'),
+  body('sendInvite').optional().isBoolean().withMessage('sendInvite must be boolean'),
+  body('password').custom((value, { req }) => {
+    if (req.body?.sendInvite === true || req.body?.sendInvite === 'true') {
+      return true;
+    }
+    if (typeof value !== 'string' || value.length < 8) {
+      throw new Error('password must be at least 8 characters');
+    }
+    return true;
+  }),
   body('role').isIn(USER_ROLES).withMessage(`role must be one of: ${USER_ROLES.join(', ')}`),
   body('locationId').optional({ values: 'null' }).isMongoId().withMessage('Invalid locationId'),
+];
+
+export const changePasswordValidators = [
+  body('currentPassword').isString().notEmpty().withMessage('currentPassword is required'),
+  body('newPassword')
+    .isString()
+    .isLength({ min: 8 })
+    .withMessage('newPassword must be at least 8 characters'),
 ];
 
 export const updateUserValidators = [
@@ -41,6 +86,7 @@ export const updateUserValidators = [
     if (value === null || value === '') return true;
     return typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
   }),
+  body('isDisabled').optional().isBoolean().withMessage('isDisabled must be boolean'),
 ];
 
 export const createTicketValidators = [
@@ -75,11 +121,35 @@ export const updateTicketValidators = [
   deadlineOrNull,
   body('locationId').optional().isMongoId(),
   body('assignedTo').optional({ values: 'null' }).isMongoId(),
+  body('resolution')
+    .optional()
+    .isString()
+    .isLength({ max: 20000 })
+    .withMessage('resolution must be a string at most 20000 characters'),
 ];
 
 export const ticketIdParamValidators = [param('id').isMongoId().withMessage('Invalid ticket id')];
 
+export const ticketInternalNoteCreateValidators = [
+  ...ticketIdParamValidators,
+  body('body').isString().trim().notEmpty().isLength({ max: 20000 }).withMessage('body is required'),
+];
+
+export const ticketInternalNoteUpdateValidators = [
+  param('id').isMongoId().withMessage('Invalid ticket id'),
+  param('noteId').isMongoId().withMessage('Invalid note id'),
+  body('body').optional().isString().trim().notEmpty().isLength({ max: 20000 }),
+];
+
+export const ticketInternalNoteDeleteValidators = [
+  param('id').isMongoId().withMessage('Invalid ticket id'),
+  param('noteId').isMongoId().withMessage('Invalid note id'),
+];
+
+export const deleteUserValidators = [param('id').isMongoId().withMessage('Invalid user id')];
+
 export const listTicketsQueryValidators = [
+  query('newQueue').optional().isIn(['0', '1']),
   query('status').optional().isIn(TICKET_STATUSES),
   query('locationId').optional().isMongoId(),
   query('priority').optional().isIn(TICKET_PRIORITIES),
@@ -113,6 +183,11 @@ export const bulkUpdateTicketValidators = [
     .withMessage('updates.deadline must be a valid ISO date or null'),
   body('updates.locationId').optional().isMongoId(),
   body('updates.assignedTo').optional({ values: 'null' }).isMongoId(),
+  body('updates.resolution')
+    .optional()
+    .isString()
+    .isLength({ max: 20000 })
+    .withMessage('updates.resolution must be a string at most 20000 characters'),
 ];
 
 export const createMessageValidators = [

@@ -63,6 +63,71 @@ export async function createTicketCompletedStatusNotification(ticketId) {
 }
 
 /**
+ * Notify assignee when a ticket is assigned to them (in-app + socket).
+ * @param {import('mongoose').Types.ObjectId | string} ticketObjectId
+ * @param {import('mongoose').Types.ObjectId | string} assigneeUserId
+ * @param {{ assignedByName?: string | null }} [meta]
+ */
+export async function createTicketAssignedNotification(
+  ticketObjectId,
+  assigneeUserId,
+  meta = {},
+) {
+  const t = await Ticket.findById(ticketObjectId).select('ticketId title').lean();
+  if (!t || !assigneeUserId) return;
+
+  const userOid =
+    typeof assigneeUserId === 'object' && assigneeUserId !== null
+      ? assigneeUserId._id ?? assigneeUserId
+      : assigneeUserId;
+
+  const existing = await UserNotification.findOne({
+    userId: userOid,
+    ticketId: t._id,
+    channel: STATUS_CHANNEL,
+    kind: 'ticket_assigned',
+    dismissedAt: null,
+  })
+    .select('_id')
+    .lean();
+  if (existing) return;
+
+  const ref = t.ticketId != null ? String(t.ticketId) : '—';
+  const title = 'Ticket assigned to you';
+  const byName =
+    meta.assignedByName != null && String(meta.assignedByName).trim()
+      ? String(meta.assignedByName).trim()
+      : '';
+  const body = byName
+    ? `${ref} — ${String(t.title ?? '').trim() || '—'} was assigned to you by ${byName}.`
+    : `${ref} — ${String(t.title ?? '').trim() || '—'} was assigned to you.`;
+
+  const doc = await UserNotification.create({
+    userId: userOid,
+    channel: STATUS_CHANNEL,
+    kind: 'ticket_assigned',
+    ticketId: t._id,
+    title,
+    body,
+  });
+
+  const createdAt =
+    doc && doc.createdAt instanceof Date
+      ? doc.createdAt.toISOString()
+      : new Date().toISOString();
+
+  emitUserNotification(String(userOid), {
+    id: String(doc._id),
+    channel: STATUS_CHANNEL,
+    kind: 'ticket_assigned',
+    ticketId: String(t._id),
+    title,
+    body,
+    createdAt,
+  });
+}
+
+/**
  * Notify every admin when a new ticket is created (in-app + socket).
  * @param {import('mongoose').Types.ObjectId | string} ticketObjectId
  */
