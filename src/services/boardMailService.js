@@ -25,8 +25,32 @@ function getTransport() {
     port,
     secure: port === 465,
     auth: { user, pass: pass || '' },
+    /** Avoid hanging requests on Render when SMTP is slow or unreachable. */
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
   });
   return cached;
+}
+
+const MAIL_SEND_TIMEOUT_MS = 20_000;
+
+async function sendMailWithTimeout(transport, mailOptions) {
+  let timer;
+  try {
+    await Promise.race([
+      transport.sendMail(mailOptions),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`SMTP send timed out after ${MAIL_SEND_TIMEOUT_MS}ms`)),
+          MAIL_SEND_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    return true;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -389,7 +413,7 @@ export async function sendPortalInviteEmail(payload) {
     return false;
   }
   try {
-    await transport.sendMail({ from, to: payload.to, subject, text, html });
+    await sendMailWithTimeout(transport, { from, to: payload.to, subject, text, html });
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console

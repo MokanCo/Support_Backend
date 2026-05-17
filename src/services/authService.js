@@ -1,4 +1,5 @@
 import bcrypt from 'bcrypt';
+import { BCRYPT_ROUNDS } from '../config/bcrypt.js';
 import User from '../models/User.js';
 import Location from '../models/Location.js';
 import { AppError } from '../utils/AppError.js';
@@ -72,7 +73,7 @@ export async function changeOwnPassword(userId, currentPassword, newPassword) {
     throw new AppError('New password must be different from your current password', 400);
   }
 
-  user.password = await bcrypt.hash(next, 12);
+  user.password = await bcrypt.hash(next, BCRYPT_ROUNDS);
   user.mustChangePassword = false;
   await user.save();
 

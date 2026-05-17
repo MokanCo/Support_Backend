@@ -3,10 +3,10 @@ import mongoose from 'mongoose';
 import User from '../models/User.js';
 import Location from '../models/Location.js';
 import Ticket from '../models/Ticket.js';
+import { BCRYPT_ROUNDS } from '../config/bcrypt.js';
 import { AppError } from '../utils/AppError.js';
 import { sendPortalInviteEmail } from './boardMailService.js';
 
-const SALT_ROUNDS = 12;
 export const INVITE_TEMP_PASSWORD = 'password123';
 
 /**
@@ -35,7 +35,7 @@ export async function createUser(input) {
     throw new AppError('password must be at least 8 characters', 400);
   }
 
-  const password = await bcrypt.hash(plainPassword, SALT_ROUNDS);
+  const password = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS);
 
   const user = await User.create({
     name: input.name.trim(),
@@ -47,17 +47,16 @@ export async function createUser(input) {
   });
 
   if (sendInvite) {
-    try {
-      await sendPortalInviteEmail({
-        to: email,
-        name: user.name,
-        email,
-        temporaryPassword: INVITE_TEMP_PASSWORD,
-      });
-    } catch (e) {
+    // Do not block the HTTP response on SMTP (Render can take 10–30s to connect).
+    void sendPortalInviteEmail({
+      to: email,
+      name: user.name,
+      email,
+      temporaryPassword: INVITE_TEMP_PASSWORD,
+    }).catch((e) => {
       // eslint-disable-next-line no-console
       console.error('[userService] portal invite email failed', e);
-    }
+    });
   }
 
   return sanitizeUser(user);
@@ -125,7 +124,7 @@ export async function updateUserById(id, patch) {
   if (patch.name !== undefined) user.name = patch.name.trim();
 
   if (patch.password) {
-    user.password = await bcrypt.hash(patch.password, SALT_ROUNDS);
+    user.password = await bcrypt.hash(patch.password, BCRYPT_ROUNDS);
     user.mustChangePassword = false;
   }
 
