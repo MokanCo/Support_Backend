@@ -5,8 +5,6 @@ import Location from '../models/Location.js';
 import Ticket from '../models/Ticket.js';
 import { BCRYPT_ROUNDS } from '../config/bcrypt.js';
 import { AppError } from '../utils/AppError.js';
-import { sendPortalInviteEmail } from './boardMailService.js';
-
 export const INVITE_TEMP_PASSWORD = 'password123';
 
 /**
@@ -45,19 +43,6 @@ export async function createUser(input) {
     locationId: input.locationId ? new mongoose.Types.ObjectId(input.locationId) : null,
     mustChangePassword: sendInvite,
   });
-
-  if (sendInvite) {
-    // Do not block the HTTP response on SMTP (Render can take 10–30s to connect).
-    void sendPortalInviteEmail({
-      to: email,
-      name: user.name,
-      email,
-      temporaryPassword: INVITE_TEMP_PASSWORD,
-    }).catch((e) => {
-      // eslint-disable-next-line no-console
-      console.error('[userService] portal invite email failed', e);
-    });
-  }
 
   return sanitizeUser(user);
 }

@@ -1,8 +1,28 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { runInBackground } from '../utils/backgroundTasks.js';
+import { sendPortalInviteEmail } from '../services/boardMailService.js';
 import * as userService from '../services/userService.js';
 
+function wantsInvite(body) {
+  return body?.sendInvite === true || body?.sendInvite === 'true';
+}
+
 export const createUser = asyncHandler(async (req, res) => {
+  const sendInvite = wantsInvite(req.body);
   const user = await userService.createUser(req.body);
+
+  if (sendInvite) {
+    const invitePayload = {
+      to: user.email,
+      name: user.name,
+      email: user.email,
+      temporaryPassword: userService.INVITE_TEMP_PASSWORD,
+    };
+    res.once('finish', () => {
+      runInBackground('portal-invite-email', () => sendPortalInviteEmail(invitePayload));
+    });
+  }
+
   res.status(201).json({ user });
 });
 

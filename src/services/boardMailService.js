@@ -10,7 +10,7 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-function getTransport() {
+export function getTransport() {
   if (cached !== undefined) return cached;
   const host = process.env.SMTP_HOST?.trim();
   const port = Number(process.env.SMTP_PORT || '587');
@@ -33,17 +33,36 @@ function getTransport() {
   return cached;
 }
 
-const MAIL_SEND_TIMEOUT_MS = 20_000;
+/** Log SMTP readiness at startup (does not block requests). */
+export async function logSmtpStatus() {
+  const transport = getTransport();
+  if (!transport) {
+    // eslint-disable-next-line no-console
+    console.warn('[mail] SMTP not configured (set SMTP_HOST and SMTP_USER on Render)');
+    return;
+  }
+  try {
+    await transport.verify();
+    // eslint-disable-next-line no-console
+    console.info('[mail] SMTP connection verified');
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[mail] SMTP verify failed — invite emails may not send', e);
+  }
+}
 
-async function sendMailWithTimeout(transport, mailOptions) {
+const MAIL_SEND_TIMEOUT_MS = 20_000;
+const INVITE_MAIL_TIMEOUT_MS = 45_000;
+
+async function sendMailWithTimeout(transport, mailOptions, timeoutMs = MAIL_SEND_TIMEOUT_MS) {
   let timer;
   try {
     await Promise.race([
       transport.sendMail(mailOptions),
       new Promise((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`SMTP send timed out after ${MAIL_SEND_TIMEOUT_MS}ms`)),
-          MAIL_SEND_TIMEOUT_MS,
+          () => reject(new Error(`SMTP send timed out after ${timeoutMs}ms`)),
+          timeoutMs,
         );
       }),
     ]);
@@ -413,7 +432,13 @@ export async function sendPortalInviteEmail(payload) {
     return false;
   }
   try {
-    await sendMailWithTimeout(transport, { from, to: payload.to, subject, text, html });
+    await sendMailWithTimeout(
+      transport,
+      { from, to: payload.to, subject, text, html },
+      INVITE_MAIL_TIMEOUT_MS,
+    );
+    // eslint-disable-next-line no-console
+    console.info('[mail] Portal invite sent to', payload.to);
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
