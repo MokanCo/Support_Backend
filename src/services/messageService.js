@@ -111,7 +111,7 @@ export async function createMessage(actor, input) {
   }
 
   const row = mapMessageDocumentToClientRow(populated);
-  await emitTicketMessage(input.ticketId, row);
+  void emitTicketMessage(input.ticketId, row);
   return row;
 }
 
