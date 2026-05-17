@@ -14,36 +14,21 @@ function escapeHtml(s) {
 
 export function getSmtpTransport() {
   if (smtpTransport !== undefined) return smtpTransport;
-  const host = process.env.SMTP_HOST?.trim();
-  const port = Number(process.env.SMTP_PORT || '587');
   const user = process.env.SMTP_USER?.trim();
   const pass = process.env.SMTP_PASS?.trim();
-  if (!host || !user) {
+  if (!user || !pass) {
     smtpTransport = null;
     return null;
   }
-  const secure =
-    process.env.SMTP_SECURE === 'true' || process.env.SMTP_SECURE === '1' || port === 465;
   smtpTransport = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: { user, pass: pass || '' },
-    requireTLS: !secure && port === 587,
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000,
+    service: 'gmail',
+    auth: { user, pass },
   });
   return smtpTransport;
 }
 
 export function getDefaultFrom() {
-  return (
-    process.env.RESEND_FROM?.trim()
-    || process.env.SMTP_FROM?.trim()
-    || process.env.SMTP_USER?.trim()
-    || 'noreply@localhost'
-  );
+  return process.env.RESEND_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
 }
 
 export function getResendApiKey() {
@@ -136,7 +121,7 @@ export async function dispatchEmail(
 
   const transport = getSmtpTransport();
   if (!transport) {
-    throw new Error('Mail not configured (set RESEND_API_KEY or SMTP_HOST + SMTP_USER)');
+    throw new Error('Mail not configured (set RESEND_API_KEY or SMTP_USER + SMTP_PASS)');
   }
 
   return sendViaSmtp(
@@ -167,7 +152,7 @@ export async function logMailProviderStatus() {
   if (!smtp) {
     // eslint-disable-next-line no-console
     console.warn(
-      '[mail] No mail provider configured. Set RESEND_API_KEY (recommended on Render) or SMTP_HOST + SMTP_USER.',
+      '[mail] No mail provider configured. Set RESEND_API_KEY (recommended on Render) or SMTP_USER + SMTP_PASS (Gmail).',
     );
     return;
   }
@@ -182,7 +167,7 @@ export async function logMailProviderStatus() {
   try {
     await smtp.verify();
     // eslint-disable-next-line no-console
-    console.info('[mail] SMTP connection verified');
+    console.info('[mail] Gmail (nodemailer) connection verified');
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[mail] SMTP verify failed', e?.message || e);
