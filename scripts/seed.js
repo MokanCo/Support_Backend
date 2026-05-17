@@ -9,6 +9,7 @@ const SALT_ROUNDS = 12;
 
 const DEFAULT_PASSWORD = 'ChangeMe123!';
 
+/** Dev-only demo accounts. Run `npm run remove-demo` before production. */
 async function seed() {
   await connectDb();
 

@@ -1,6 +1,10 @@
 import mongoose from 'mongoose';
 import { AppError } from '../utils/AppError.js';
 
+function send(res, status, message) {
+  return res.status(status).json({ success: false, error: message, message });
+}
+
 /**
  * @param {unknown} err
  * @param {import('express').Request} req
@@ -14,20 +18,20 @@ export function errorHandler(err, req, res, next) {
   }
 
   if (err instanceof AppError) {
-    return res.status(err.statusCode).json({ success: false, message: err.message });
+    return send(res, err.statusCode, err.message);
   }
 
   if (err instanceof mongoose.Error.ValidationError) {
-    const messages = Object.values(err.errors).map((e) => e.message);
-    return res.status(400).json({ success: false, message: messages.join(', ') });
+    const message = Object.values(err.errors).map((e) => e.message).join(', ');
+    return send(res, 400, message);
   }
 
   if (err instanceof mongoose.Error.CastError) {
-    return res.status(400).json({ success: false, message: 'Invalid identifier' });
+    return send(res, 400, 'Invalid identifier');
   }
 
   if (err && typeof err === 'object' && 'code' in err && err.code === 11000) {
-    return res.status(409).json({ success: false, message: 'Duplicate value' });
+    return send(res, 409, 'Duplicate value');
   }
 
   const statusCode =
@@ -36,12 +40,14 @@ export function errorHandler(err, req, res, next) {
       : 500;
 
   const message =
-    statusCode === 500 ? 'Internal server error' : String(err && err.message ? err.message : 'Error');
+    statusCode === 500
+      ? 'Internal server error'
+      : String(err && err.message ? err.message : 'Error');
 
   if (statusCode === 500) {
     // eslint-disable-next-line no-console
     console.error(err);
   }
 
-  return res.status(statusCode).json({ success: false, message });
+  return send(res, statusCode, message);
 }

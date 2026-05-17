@@ -13,6 +13,16 @@ export const logout = asyncHandler(async (_req, res) => {
 });
 
 export const me = asyncHandler(async (req, res) => {
-  const user = await authService.getMe(req.user.id);
-  res.status(200).json({ user });
+  const { user, location } = await authService.getMe(req.user.id);
+  res.status(200).json({ user, location });
+});
+
+export const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const { user, location } = await authService.changeOwnPassword(
+    req.user.id,
+    currentPassword,
+    newPassword,
+  );
+  res.status(200).json({ user, location });
 });

@@ -1,10 +1,24 @@
 import Ticket from '../models/Ticket.js';
+import User from '../models/User.js';
 
 function addEmail(set, raw) {
   const s = String(raw ?? '')
     .trim()
     .toLowerCase();
   if (s) set.add(s);
+}
+
+/** Admin inboxes for new-ticket alerts (portal admins + optional ADMIN_EMAIL). */
+export async function getAdminNotificationEmails() {
+  const admins = await User.find({ role: 'admin', isDisabled: { $ne: true } })
+    .select('email')
+    .lean();
+  const emails = new Set();
+  for (const a of admins) {
+    addEmail(emails, a.email);
+  }
+  addEmail(emails, process.env.ADMIN_EMAIL);
+  return [...emails];
 }
 
 /**

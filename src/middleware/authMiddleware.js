@@ -1,6 +1,7 @@
 import { verifyToken } from '../utils/jwt.js';
 import { AppError } from '../utils/AppError.js';
 import User from '../models/User.js';
+import Location from '../models/Location.js';
 
 function extractBearerToken(authorization) {
   if (!authorization || typeof authorization !== 'string') {
@@ -27,9 +28,18 @@ export async function authMiddleware(req, _res, next) {
       throw new AppError('Invalid token', 401);
     }
 
-    const user = await User.findById(decoded.sub).select('_id role locationId name email');
+    const user = await User.findById(decoded.sub).select('_id role locationId name email isDisabled');
     if (!user) {
       throw new AppError('User no longer exists', 401);
+    }
+    if (user.isDisabled) {
+      throw new AppError('This account has been disabled', 403);
+    }
+    if (user.locationId) {
+      const loc = await Location.findById(user.locationId).select('isDisabled');
+      if (loc?.isDisabled) {
+        throw new AppError('This location has been disabled', 403);
+      }
     }
 
     req.user = {

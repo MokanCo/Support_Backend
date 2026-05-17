@@ -6,6 +6,9 @@ import { validateRequest } from '../middleware/validate.js';
 import {
   createLocationValidators,
   locationIdParamValidators,
+  listLocationsQueryValidators,
+  updateLocationValidators,
+  bulkLocationIdsValidators,
 } from '../utils/validators.js';
 
 const router = Router();
@@ -80,10 +83,14 @@ router.use(authMiddleware);
  *             schema:
  *               type: object
  *               properties:
- *                 locations:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/Location'
+ *                 total:
+ *                   type: integer
+ *                 page:
+ *                   type: integer
+ *                 pageSize:
+ *                   type: integer
+ *                 totalPages:
+ *                   type: integer
  *       401:
  *         description: Unauthorized
  *         content:
@@ -111,11 +118,114 @@ router.post(
   locationController.createLocation,
 );
 
-router.get('/', locationController.listLocations);
+router.get(
+  '/',
+  listLocationsQueryValidators,
+  validateRequest,
+  locationController.listLocations,
+);
+
+/**
+ * @swagger
+ * /api/locations/bulk:
+ *   post:
+ *     tags: [Locations]
+ *     summary: Bulk delete locations
+ *     description: Admin only. Deletes each id if no users or tickets reference the location.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string }
+ *     responses:
+ *       200:
+ *         description: Count deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 deleted: { type: integer }
+ *       400: { description: Validation error }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden }
+ *       409: { description: Location has users or tickets }
+ *       500: { description: Server error }
+ */
+router.post(
+  '/bulk',
+  roleMiddleware(['admin']),
+  bulkLocationIdsValidators,
+  validateRequest,
+  locationController.bulkDeleteLocations,
+);
 
 /**
  * @swagger
  * /api/locations/{id}:
+ *   patch:
+ *     tags: [Locations]
+ *     summary: Update location
+ *     description: Admin only. Partial update including soft-disable via isDisabled.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string }
+ *               email: { type: string }
+ *               phone: { type: string }
+ *               address: { type: string }
+ *               isDisabled: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Updated location
+ *       400: { description: Validation error }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden }
+ *       404: { description: Not found }
+ *       500: { description: Server error }
+ *   delete:
+ *     tags: [Locations]
+ *     summary: Delete location
+ *     description: Admin only. Fails if users or tickets still reference the location.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok: { type: boolean }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden }
+ *       404: { description: Not found }
+ *       409: { description: Conflict }
+ *       500: { description: Server error }
  *   get:
  *     tags: [Locations]
  *     summary: Get location by ID
@@ -173,6 +283,27 @@ router.get('/', locationController.listLocations);
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  */
+router.get(
+  '/:id/delete-impact',
+  roleMiddleware(['admin']),
+  locationIdParamValidators,
+  validateRequest,
+  locationController.getDeleteImpact,
+);
+router.patch(
+  '/:id',
+  roleMiddleware(['admin']),
+  updateLocationValidators,
+  validateRequest,
+  locationController.updateLocation,
+);
+router.delete(
+  '/:id',
+  roleMiddleware(['admin']),
+  locationIdParamValidators,
+  validateRequest,
+  locationController.deleteLocation,
+);
 router.get(
   '/:id',
   locationIdParamValidators,

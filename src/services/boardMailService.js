@@ -156,6 +156,249 @@ export async function sendTicketCompletedEmails(payload) {
 }
 
 /**
+ * @param {{
+ *   to: string;
+ *   assigneeName: string;
+ *   ticketRef: string;
+ *   title: string;
+ *   locationName?: string | null;
+ *   ticketId?: string;
+ * }} payload
+ */
+function ticketViewUrl(ticketObjectId) {
+  const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+  if (!base || !ticketObjectId) return '';
+  return `${base}/dashboard/tickets/view?id=${encodeURIComponent(String(ticketObjectId))}`;
+}
+
+/**
+ * Email admins when a partner submits a new ticket.
+ * @param {{
+ *   to: string[];
+ *   ticketRef: string;
+ *   title: string;
+ *   locationName?: string | null;
+ *   partnerName?: string | null;
+ *   ticketId?: string;
+ * }} payload
+ */
+export async function sendNewPartnerTicketAdminEmail(payload) {
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  const transport = getTransport();
+  const ref = payload.ticketRef || '—';
+  const subject = `New ticket ${ref} from partner`;
+  const ticketUrl = ticketViewUrl(payload.ticketId);
+  const partnerLabel = payload.partnerName?.trim() || 'A partner';
+
+  const lines = [
+    'A new support ticket was opened by a partner.',
+    '',
+    `Reference: ${ref}`,
+    `Title: ${payload.title || '—'}`,
+    `Submitted by: ${partnerLabel}`,
+  ];
+  if (payload.locationName) lines.push(`Location: ${payload.locationName}`);
+  if (ticketUrl) lines.push('', `View ticket: ${ticketUrl}`);
+  const text = lines.join('\n');
+
+  const safeRef = escapeHtml(ref);
+  const safeTitle = escapeHtml(payload.title || '—');
+  const safePartner = escapeHtml(partnerLabel);
+  const safeLoc = payload.locationName ? escapeHtml(payload.locationName) : '';
+  const href = ticketUrl ? escapeHtml(ticketUrl) : '';
+  const buttonBlock = href
+    ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
+  <tr>
+    <td align="left">
+      <a href="${href}" target="_blank" rel="noopener noreferrer"
+        style="display:inline-block;padding:12px 28px;background:#0d6efd;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.2;">
+        View ticket
+      </a>
+    </td>
+  </tr>
+</table>`
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
+    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;"><strong>${safePartner}</strong> opened a new support ticket.</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Reference</strong><br>${safeRef}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Title</strong><br>${safeTitle}</p>
+    ${safeLoc ? `<p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Location</strong><br>${safeLoc}</p>` : ''}
+    ${buttonBlock}
+  </div>
+</body>
+</html>`;
+
+  const recipients = [...new Set((payload.to ?? []).map((e) => String(e).trim()).filter(Boolean))];
+  if (!transport || recipients.length === 0) {
+    // eslint-disable-next-line no-console
+    console.info('[mail] New partner ticket (no SMTP or recipients):', text.replace(/\n/g, ' | '));
+    return false;
+  }
+  try {
+    await transport.sendMail({ from, to: recipients.join(', '), subject, text, html });
+    return true;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[mail] new partner ticket admin email failed', e);
+    return false;
+  }
+}
+
+export async function sendTicketAssignedEmail(payload) {
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  const transport = getTransport();
+  const ref = payload.ticketRef || '—';
+  const subject = `Ticket ${ref} assigned to you`;
+  const ticketUrl = ticketViewUrl(payload.ticketId);
+
+  const lines = [
+    `Hi ${payload.assigneeName},`,
+    '',
+    `A support ticket has been assigned to you.`,
+    '',
+    `Reference: ${ref}`,
+    `Title: ${payload.title || '—'}`,
+  ];
+  if (payload.locationName) lines.push(`Location: ${payload.locationName}`);
+  if (ticketUrl) lines.push('', `View ticket: ${ticketUrl}`);
+  const text = lines.join('\n');
+
+  const safeName = escapeHtml(payload.assigneeName);
+  const safeRef = escapeHtml(ref);
+  const safeTitle = escapeHtml(payload.title || '—');
+  const safeLoc = payload.locationName ? escapeHtml(payload.locationName) : '';
+  const href = ticketUrl ? escapeHtml(ticketUrl) : '';
+  const buttonBlock = href
+    ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
+  <tr>
+    <td align="left">
+      <a href="${href}" target="_blank" rel="noopener noreferrer"
+        style="display:inline-block;padding:12px 28px;background:#0d6efd;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.2;">
+        View ticket
+      </a>
+    </td>
+  </tr>
+</table>
+<p style="margin:0 0 16px;font-size:13px;color:#666;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+  Or open this link: <a href="${href}" style="color:#0d6efd;">${href}</a>
+</p>`
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
+    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hi <strong>${safeName}</strong>, a support ticket has been assigned to you.</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Reference</strong><br>${safeRef}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Title</strong><br>${safeTitle}</p>
+    ${safeLoc ? `<p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Location</strong><br>${safeLoc}</p>` : ''}
+    ${buttonBlock}
+  </div>
+</body>
+</html>`;
+
+  if (!transport || !payload.to) {
+    // eslint-disable-next-line no-console
+    console.info('[mail] Ticket assigned (no SMTP or recipient):', text.replace(/\n/g, ' | '));
+    return false;
+  }
+  try {
+    await transport.sendMail({ from, to: payload.to, subject, text, html });
+    return true;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[mail] ticket assignment send failed', e);
+    return false;
+  }
+}
+
+/**
+ * Portal invite for a new location user (temporary password).
+ * @param {{
+ *   to: string;
+ *   name: string;
+ *   email: string;
+ *   temporaryPassword: string;
+ * }} payload
+ */
+export async function sendPortalInviteEmail(payload) {
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  const transport = getTransport();
+  const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+  const loginUrl = base ? `${base}/login` : '/login';
+  const subject = 'You have been invited to the Moka&Co portal';
+
+  const safeName = escapeHtml(payload.name);
+  const safeEmail = escapeHtml(payload.email);
+  const safePassword = escapeHtml(payload.temporaryPassword);
+  const href = escapeHtml(loginUrl);
+
+  const text = [
+    `Hi ${payload.name},`,
+    '',
+    'You have been invited to use the Moka&Co portal.',
+    '',
+    'Your sign-in credentials:',
+    `Email: ${payload.email}`,
+    `Temporary password: ${payload.temporaryPassword}`,
+    '',
+    `Sign in: ${loginUrl}`,
+    '',
+    'You will be asked to choose a new password on first login.',
+    'If you have any trouble signing in, please contact your administrator.',
+  ].join('\n');
+
+  const buttonBlock = `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
+  <tr>
+    <td align="left">
+      <a href="${href}" target="_blank" rel="noopener noreferrer"
+        style="display:inline-block;padding:12px 28px;background:#0d6efd;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.2;">
+        Sign in to portal
+      </a>
+    </td>
+  </tr>
+</table>
+<p style="margin:0 0 16px;font-size:13px;color:#666;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+  Or open this link: <a href="${href}" style="color:#0d6efd;">${href}</a>
+</p>`;
+
+  const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
+    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hi <strong>${safeName}</strong>,</p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.55;">You have been invited to use the <strong>Moka&amp;Co</strong> portal. Below are your credentials. Please sign in and choose a new password when prompted.</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Email</strong><br>${safeEmail}</p>
+    <p style="margin:0 0 16px;font-size:14px;color:#555;"><strong>Temporary password</strong><br><code style="background:#f4f4f5;padding:2px 6px;border-radius:4px;">${safePassword}</code></p>
+    ${buttonBlock}
+    <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#666;">If you see any issue with login, please contact your administrator.</p>
+  </div>
+</body>
+</html>`;
+
+  if (!transport || !payload.to) {
+    // eslint-disable-next-line no-console
+    console.info('[mail] Portal invite (no SMTP or recipient):', text.replace(/\n/g, ' | '));
+    return false;
+  }
+  try {
+    await transport.sendMail({ from, to: payload.to, subject, text, html });
+    return true;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[mail] portal invite send failed', e);
+    return false;
+  }
+}
+
+/**
  * Public contact form email.
  * @param {{
  *   name: string;

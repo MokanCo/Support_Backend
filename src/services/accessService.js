@@ -15,22 +15,39 @@ function ticketLocationIdString(ticket) {
 }
 
 /**
- * @param {{ role: string; locationId: string | null }} user
+ * @param {{ createdBy?: unknown }} ticket
+ * @returns {string} Mongo id string, or "" if missing
+ */
+function ticketCreatedByString(ticket) {
+  const c = ticket?.createdBy;
+  if (c == null) return '';
+  if (typeof c === 'object' && c !== null && '_id' in c && c._id != null) {
+    return String(c._id);
+  }
+  return String(c);
+}
+
+/**
+ * @param {{ id: string; role: string; locationId: string | null }} user
  * @returns {import('mongoose').FilterQuery<Record<string, unknown>> | null}
  * Returns null means "no filter" (all tickets). Empty impossible object for partner without location.
+ * Partners: tickets at their location that they created (not other users at the same location).
  */
 export function ticketListFilterForUser(user) {
   if (user.role === 'partner') {
     if (!user.locationId) {
       throw new AppError('Partner account is missing a location', 403);
     }
-    return { locationId: new mongoose.Types.ObjectId(user.locationId) };
+    return {
+      locationId: new mongoose.Types.ObjectId(user.locationId),
+      createdBy: new mongoose.Types.ObjectId(user.id),
+    };
   }
   return {};
 }
 
 /**
- * Scope for GET /api/tickets list (matches dashboard copy: support sees assignments only).
+ * Scope for GET /api/tickets list (support: assignments only; partner: own tickets at location).
  * @param {{ id: string; role: string; locationId: string | null }} user
  */
 export function ticketListScopeForUser(user) {
@@ -42,8 +59,8 @@ export function ticketListScopeForUser(user) {
 }
 
 /**
- * @param {{ role: string; locationId: string | null }} user
- * @param {{ locationId?: import('mongoose').Types.ObjectId }} ticket
+ * @param {{ role: string; locationId: string | null; id: string }} user
+ * @param {{ locationId?: unknown; createdBy?: unknown }} ticket
  */
 export function assertCanAccessTicket(user, ticket) {
   if (!ticket) {
@@ -54,6 +71,9 @@ export function assertCanAccessTicket(user, ticket) {
       throw new AppError('Partner account is missing a location', 403);
     }
     if (ticketLocationIdString(ticket) !== user.locationId) {
+      throw new AppError('Forbidden', 403);
+    }
+    if (ticketCreatedByString(ticket) !== user.id) {
       throw new AppError('Forbidden', 403);
     }
   }
