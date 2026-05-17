@@ -112,6 +112,7 @@ router.use(authMiddleware, roleMiddleware(['admin']));
  *               $ref: '#/components/schemas/ErrorMessage'
  */
 router.post('/', createUserValidators, validateRequest, userController.createUser);
+router.get('/online', userController.listOnlineUsers);
 router.get('/', userController.listUsers);
 
 /**

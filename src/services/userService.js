@@ -5,7 +5,11 @@ import Location from '../models/Location.js';
 import Ticket from '../models/Ticket.js';
 import { BCRYPT_ROUNDS } from '../config/bcrypt.js';
 import { AppError } from '../utils/AppError.js';
+import { getOnlineUserIds, isUserOnline } from '../realtime/presence.js';
+
 export const INVITE_TEMP_PASSWORD = 'password123';
+/** Display-only placeholder for password column in admin user tables. */
+export const MASKED_PASSWORD_DISPLAY = '********';
 
 /**
  * @param {{ name: string; email: string; password: string; role: string; locationId?: string | null }} input
@@ -48,8 +52,12 @@ export async function createUser(input) {
 }
 
 export async function listUsers() {
-  const users = await User.find().sort({ createdAt: -1 }).lean();
+  const users = await User.find().select('-password').sort({ createdAt: -1 }).lean();
   return users.map(sanitizeUserLean);
+}
+
+export function listOnlineUserIds() {
+  return [...getOnlineUserIds()];
 }
 
 /** Users assigned to the given location (`locationId` matches). */
@@ -154,28 +162,34 @@ export async function updateUserById(id, patch) {
 }
 
 function sanitizeUser(userDoc) {
+  const id = String(userDoc._id);
   return {
-    id: String(userDoc._id),
+    id,
     name: userDoc.name,
     email: userDoc.email,
+    password: MASKED_PASSWORD_DISPLAY,
     role: userDoc.role,
     locationId: userDoc.locationId ? String(userDoc.locationId) : null,
     isDisabled: Boolean(userDoc.isDisabled),
     mustChangePassword: Boolean(userDoc.mustChangePassword),
+    online: isUserOnline(id),
     createdAt: userDoc.createdAt,
     updatedAt: userDoc.updatedAt,
   };
 }
 
 function sanitizeUserLean(u) {
+  const id = String(u._id);
   return {
-    id: String(u._id),
+    id,
     name: u.name,
     email: u.email,
+    password: MASKED_PASSWORD_DISPLAY,
     role: u.role,
     locationId: u.locationId ? String(u.locationId) : null,
     isDisabled: Boolean(u.isDisabled),
     mustChangePassword: Boolean(u.mustChangePassword),
+    online: isUserOnline(id),
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
   };

@@ -33,6 +33,7 @@ import {
   createTicketCreatedAdminNotifications,
 } from './notificationService.js';
 import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
+import { isUserOnline } from '../realtime/presence.js';
 
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -221,7 +222,15 @@ export function formatTicketResponse(ticketDoc) {
     createdByUser: createdByPopulated ?? undefined,
     assignedTo,
     assignedToName: assignedPopulated?.name != null ? String(assignedPopulated.name) : null,
-    assignedToUser: assignedPopulated ?? undefined,
+    assignedToUser: assignedPopulated
+      ? {
+          id: String(assignedPopulated._id),
+          name: assignedPopulated.name,
+          email: assignedPopulated.email,
+          role: assignedPopulated.role,
+          online: isUserOnline(String(assignedPopulated._id)),
+        }
+      : undefined,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     isNew,
@@ -341,11 +350,10 @@ export async function createTicket(actor, input) {
  */
 export async function listTickets(actor, query) {
   /** @type {import('mongoose').FilterQuery<typeof Ticket>} */
-  const filter = { ...ticketListScopeForUser(actor) };
+  const filter = { ...ticketListScopeForUser(actor, query) };
 
   if (query.newQueue === '1' || query.newQueue === true) {
     filter.status = 'in_queue';
-    filter.progress = 0;
   } else if (query.status) {
     filter.status = query.status;
   }

@@ -6,7 +6,12 @@ import User from '../models/User.js';
 import { assertCanAccessTicket } from '../services/accessService.js';
 import { getJwtSecret } from '../utils/jwt.js';
 import { setSocketIo } from './messageHub.js';
-import { bindPresenceIo, markUserConnected, markUserDisconnected } from './presence.js';
+import {
+  bindPresenceIo,
+  getOnlineUserIds,
+  markUserConnected,
+  markUserDisconnected,
+} from './presence.js';
 import { buildTicketChatHeaderState } from '../services/ticketChatHeaderService.js';
 
 function extractToken(socket) {
@@ -62,6 +67,9 @@ export function attachSocketServer(httpServer) {
     const userId = socket.data.userId;
     markUserConnected(userId);
     void socket.join(`user:${userId}`);
+    socket.emit('presence:sync', {
+      onlineUserIds: [...getOnlineUserIds()],
+    });
 
     const join = async (ticketId, cb) => {
       try {
