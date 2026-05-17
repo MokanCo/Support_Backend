@@ -2,9 +2,12 @@ import bcrypt from 'bcrypt';
 import mongoose from 'mongoose';
 import User from '../models/User.js';
 import Location from '../models/Location.js';
+import Ticket from '../models/Ticket.js';
 import { AppError } from '../utils/AppError.js';
+import { sendPortalInviteEmail } from './boardMailService.js';
 
 const SALT_ROUNDS = 12;
+export const INVITE_TEMP_PASSWORD = 'password123';
 
 /**
  * @param {{ name: string; email: string; password: string; role: string; locationId?: string | null }} input
@@ -26,7 +29,13 @@ export async function createUser(input) {
     }
   }
 
-  const password = await bcrypt.hash(input.password, SALT_ROUNDS);
+  const sendInvite = Boolean(input.sendInvite);
+  const plainPassword = sendInvite ? INVITE_TEMP_PASSWORD : input.password;
+  if (!plainPassword || String(plainPassword).length < 8) {
+    throw new AppError('password must be at least 8 characters', 400);
+  }
+
+  const password = await bcrypt.hash(plainPassword, SALT_ROUNDS);
 
   const user = await User.create({
     name: input.name.trim(),
@@ -34,7 +43,22 @@ export async function createUser(input) {
     password,
     role: input.role,
     locationId: input.locationId ? new mongoose.Types.ObjectId(input.locationId) : null,
+    mustChangePassword: sendInvite,
   });
+
+  if (sendInvite) {
+    try {
+      await sendPortalInviteEmail({
+        to: email,
+        name: user.name,
+        email,
+        temporaryPassword: INVITE_TEMP_PASSWORD,
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[userService] portal invite email failed', e);
+    }
+  }
 
   return sanitizeUser(user);
 }
@@ -67,6 +91,7 @@ export async function listUsersForTicketAssignment(locationId) {
   }
   const oid = new mongoose.Types.ObjectId(locationId);
   const users = await User.find({
+    isDisabled: { $ne: true },
     $or: [
       { locationId: oid, role: { $in: ['support', 'admin'] } },
       { locationId: null, role: { $in: ['support', 'admin'] } },
@@ -101,6 +126,7 @@ export async function updateUserById(id, patch) {
 
   if (patch.password) {
     user.password = await bcrypt.hash(patch.password, SALT_ROUNDS);
+    user.mustChangePassword = false;
   }
 
   if (patch.role !== undefined) {
@@ -122,6 +148,10 @@ export async function updateUserById(id, patch) {
     }
   }
 
+  if (patch.isDisabled !== undefined) {
+    user.isDisabled = Boolean(patch.isDisabled);
+  }
+
   if (user.role === 'partner' && !user.locationId) {
     throw new AppError('Partners require a locationId', 400);
   }
@@ -137,6 +167,8 @@ function sanitizeUser(userDoc) {
     email: userDoc.email,
     role: userDoc.role,
     locationId: userDoc.locationId ? String(userDoc.locationId) : null,
+    isDisabled: Boolean(userDoc.isDisabled),
+    mustChangePassword: Boolean(userDoc.mustChangePassword),
     createdAt: userDoc.createdAt,
     updatedAt: userDoc.updatedAt,
   };
@@ -149,7 +181,27 @@ function sanitizeUserLean(u) {
     email: u.email,
     role: u.role,
     locationId: u.locationId ? String(u.locationId) : null,
+    isDisabled: Boolean(u.isDisabled),
+    mustChangePassword: Boolean(u.mustChangePassword),
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
   };
+}
+
+export async function deleteUserById(id) {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new AppError('Invalid user id', 400);
+  }
+  const user = await User.findById(id);
+  if (!user) {
+    throw new AppError('User not found', 404);
+  }
+  const linked = await Ticket.exists({
+    $or: [{ createdBy: user._id }, { assignedTo: user._id }],
+  });
+  if (linked) {
+    throw new AppError('Cannot delete a user who is linked to tickets', 409);
+  }
+  await User.findByIdAndDelete(id);
+  return { ok: true };
 }

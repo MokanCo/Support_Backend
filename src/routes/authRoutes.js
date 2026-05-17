@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as authController from '../controllers/authController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { validateRequest } from '../middleware/validate.js';
-import { loginValidators } from '../utils/validators.js';
+import { changePasswordValidators, loginValidators } from '../utils/validators.js';
 
 const router = Router();
 
@@ -132,5 +132,13 @@ router.post('/logout', authController.logout);
  *               $ref: '#/components/schemas/ErrorMessage'
  */
 router.get('/currentUser', authMiddleware, authController.me);
+
+router.post(
+  '/change-password',
+  authMiddleware,
+  changePasswordValidators,
+  validateRequest,
+  authController.changePassword,
+);
 
 export default router;

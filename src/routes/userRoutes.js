@@ -6,6 +6,7 @@ import { validateRequest } from '../middleware/validate.js';
 import {
   createUserValidators,
   updateUserValidators,
+  deleteUserValidators,
 } from '../utils/validators.js';
 
 const router = Router();
@@ -180,7 +181,34 @@ router.get('/', userController.listUsers);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
+ *   delete:
+ *     tags: [Users]
+ *     summary: Delete user
+ *     description: Admin only. Fails if the user is linked to any ticket.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok: { type: boolean }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden }
+ *       404: { description: Not found }
+ *       409: { description: User linked to tickets }
+ *       500: { description: Server error }
  */
 router.patch('/:id', updateUserValidators, validateRequest, userController.updateUser);
+
+router.delete('/:id', deleteUserValidators, validateRequest, userController.deleteUser);
 
 export default router;

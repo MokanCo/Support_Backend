@@ -9,8 +9,8 @@ export const createLocation = asyncHandler(async (req, res) => {
 });
 
 export const listLocations = asyncHandler(async (req, res) => {
-  const locations = await locationService.listLocationsForUser(req.user);
-  res.status(200).json({ locations });
+  const payload = await locationService.listLocationsQuery(req.user, req.query);
+  res.status(200).json(payload);
 });
 
 export const getLocation = asyncHandler(async (req, res) => {
@@ -27,4 +27,24 @@ export const getLocation = asyncHandler(async (req, res) => {
     ? await userService.listUsersForTicketAssignment(location.id)
     : await userService.listUsersByLocationId(location.id);
   res.status(200).json({ location, users });
+});
+
+export const updateLocation = asyncHandler(async (req, res) => {
+  const location = await locationService.updateLocationById(req.params.id, req.body);
+  res.status(200).json({ location });
+});
+
+export const getDeleteImpact = asyncHandler(async (req, res) => {
+  const impact = await locationService.getLocationDeleteImpact(req.params.id);
+  res.status(200).json(impact);
+});
+
+export const bulkDeleteLocations = asyncHandler(async (req, res) => {
+  const result = await locationService.bulkDeleteLocations(req.body.ids);
+  res.status(200).json(result);
+});
+
+export const deleteLocation = asyncHandler(async (req, res) => {
+  const result = await locationService.deleteLocationById(req.params.id);
+  res.status(200).json(result);
 });

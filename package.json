@@ -8,7 +8,9 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed.js",
+    "remove-demo": "node scripts/clean-db.js",
+    "clean-db": "node scripts/clean-db.js"
   },
   "engines": {
     "node": ">=18.0.0"

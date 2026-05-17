@@ -31,6 +31,9 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true, select: false },
     role: { type: String, enum: ROLES, required: true, index: true },
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', default: null },
+    isDisabled: { type: Boolean, default: false, index: true },
+    /** When true, user must set a new password before using the dashboard. */
+    mustChangePassword: { type: Boolean, default: false },
   },
   { timestamps: true },
 );
