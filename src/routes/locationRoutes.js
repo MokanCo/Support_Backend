@@ -290,6 +290,13 @@ router.get(
   validateRequest,
   locationController.getDeleteImpact,
 );
+router.post(
+  '/:id/make-primary',
+  roleMiddleware(['admin']),
+  locationIdParamValidators,
+  validateRequest,
+  locationController.makeLocationPrimary,
+);
 router.patch(
   '/:id',
   roleMiddleware(['admin']),

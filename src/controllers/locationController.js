@@ -48,3 +48,8 @@ export const deleteLocation = asyncHandler(async (req, res) => {
   const result = await locationService.deleteLocationById(req.params.id);
   res.status(200).json(result);
 });
+
+export const makeLocationPrimary = asyncHandler(async (req, res) => {
+  const location = await locationService.setLocationAsPrimary(req.params.id);
+  res.status(200).json({ location });
+});

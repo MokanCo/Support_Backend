@@ -11,6 +11,8 @@ export const createUser = asyncHandler(async (req, res) => {
   const sendInvite = wantsInvite(req.body);
   const user = await userService.createUser(req.body);
 
+  res.status(201).json({ user });
+
   if (sendInvite) {
     const invitePayload = {
       to: user.email,
@@ -18,12 +20,8 @@ export const createUser = asyncHandler(async (req, res) => {
       email: user.email,
       temporaryPassword: userService.INVITE_TEMP_PASSWORD,
     };
-    res.once('finish', () => {
-      runInBackground('portal-invite-email', () => sendPortalInviteEmail(invitePayload));
-    });
+    runInBackground('portal-invite-email', () => sendPortalInviteEmail(invitePayload));
   }
-
-  res.status(201).json({ user });
 });
 
 export const listUsers = asyncHandler(async (_req, res) => {
@@ -40,3 +38,4 @@ export const deleteUser = asyncHandler(async (req, res) => {
   const result = await userService.deleteUserById(req.params.id);
   res.status(200).json(result);
 });
+

@@ -66,20 +66,29 @@ export async function listUsersByLocationId(locationId) {
 }
 
 /**
- * Staff who can be assigned to tickets for this location: users at the site
- * plus support/admin with no location (global pool).
+ * Support users at the primary location (ticket assignee dropdown).
+ * Falls back to the ticket's location if no primary is set yet.
  */
 export async function listUsersForTicketAssignment(locationId) {
-  if (!mongoose.Types.ObjectId.isValid(locationId)) {
+  const primary = await Location.findOne({
+    isPrimary: true,
+    isDisabled: { $ne: true },
+  })
+    .select('_id')
+    .lean();
+
+  let assignLocId = primary?._id ?? null;
+  if (!assignLocId && mongoose.Types.ObjectId.isValid(locationId)) {
+    assignLocId = new mongoose.Types.ObjectId(locationId);
+  }
+  if (!assignLocId) {
     return [];
   }
-  const oid = new mongoose.Types.ObjectId(locationId);
+
   const users = await User.find({
+    locationId: assignLocId,
     isDisabled: { $ne: true },
-    $or: [
-      { locationId: oid, role: { $in: ['support', 'admin'] } },
-      { locationId: null, role: { $in: ['support', 'admin'] } },
-    ],
+    role: 'support',
   })
     .select('-password')
     .sort({ name: 1 })

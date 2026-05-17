@@ -152,6 +152,9 @@ export async function deleteLocationById(id) {
   if (!loc) {
     throw new AppError('Location not found', 404);
   }
+  if (loc.isPrimary) {
+    throw new AppError('Cannot delete the primary location', 409);
+  }
   const ticketCount = await Ticket.countDocuments({ locationId: id });
   if (ticketCount > 0) {
     throw new AppError('Cannot delete a location that still has tickets', 409);
@@ -162,6 +165,24 @@ export async function deleteLocationById(id) {
     ok: true,
     deletedUsers: userResult.deletedCount ?? 0,
   };
+}
+
+/**
+ * Mark one location as primary (clears primary on all others).
+ * @param {string} id
+ */
+export async function setLocationAsPrimary(id) {
+  const loc = await Location.findById(id);
+  if (!loc) {
+    throw new AppError('Location not found', 404);
+  }
+  if (loc.isDisabled) {
+    throw new AppError('Cannot mark a disabled location as primary', 400);
+  }
+  await Location.updateMany({ _id: { $ne: loc._id } }, { $set: { isPrimary: false } });
+  loc.isPrimary = true;
+  await loc.save();
+  return formatLocation(loc);
 }
 
 export async function bulkDeleteLocations(ids) {
@@ -189,6 +210,7 @@ function formatLocation(doc) {
     state: d.state ?? '',
     zip: d.zip ?? '',
     isDisabled: Boolean(d.isDisabled),
+    isPrimary: Boolean(d.isPrimary),
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
   };

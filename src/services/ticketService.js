@@ -38,6 +38,33 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** @param {string} assigneeId @param {string} locationId */
+async function resolveSupportAssigneeId(assigneeId, locationId) {
+  const assignee = await User.findById(assigneeId).select('role isDisabled locationId');
+  if (!assignee) {
+    throw new AppError('Assigned user not found', 400);
+  }
+  if (assignee.isDisabled) {
+    throw new AppError('Cannot assign to a disabled user', 400);
+  }
+  if (assignee.role !== 'support') {
+    throw new AppError('Only support users can be assigned to tickets', 400);
+  }
+
+  const primary = await Location.findOne({
+    isPrimary: true,
+    isDisabled: { $ne: true },
+  }).select('_id');
+  let allowedLocId = primary?._id ?? null;
+  if (!allowedLocId && mongoose.Types.ObjectId.isValid(locationId)) {
+    allowedLocId = new mongoose.Types.ObjectId(locationId);
+  }
+  if (!allowedLocId || !assignee.locationId || !assignee.locationId.equals(allowedLocId)) {
+    throw new AppError('Assignee must be a support user at the primary location', 400);
+  }
+  return assignee._id;
+}
+
 /**
  * In-app assignment notification + email to assignee.
  * @param {import('../models/Ticket.js').default} ticket
@@ -247,11 +274,7 @@ export async function createTicket(actor, input) {
 
   let assignedTo = null;
   if (input.assignedTo) {
-    const assignee = await User.findById(input.assignedTo);
-    if (!assignee) {
-      throw new AppError('Assigned user not found', 400);
-    }
-    assignedTo = assignee._id;
+    assignedTo = await resolveSupportAssigneeId(String(input.assignedTo), raw);
   }
 
   const ticketId = await allocateTicketId();
@@ -438,11 +461,10 @@ export async function updateTicket(actor, id, patch) {
     if (patch.assignedTo === null || patch.assignedTo === '') {
       ticket.assignedTo = null;
     } else {
-      const assignee = await User.findById(patch.assignedTo);
-      if (!assignee) {
-        throw new AppError('Assigned user not found', 400);
-      }
-      ticket.assignedTo = assignee._id;
+      ticket.assignedTo = await resolveSupportAssigneeId(
+        String(patch.assignedTo),
+        String(ticket.locationId),
+      );
     }
   }
 

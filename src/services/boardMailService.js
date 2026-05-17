@@ -1,75 +1,21 @@
-import nodemailer from 'nodemailer';
-
-let cached;
-
-function escapeHtml(s) {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-export function getTransport() {
-  if (cached !== undefined) return cached;
-  const host = process.env.SMTP_HOST?.trim();
-  const port = Number(process.env.SMTP_PORT || '587');
-  const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASS?.trim();
-  if (!host || !user) {
-    cached = null;
-    return null;
-  }
-  cached = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass: pass || '' },
-    /** Avoid hanging requests on Render when SMTP is slow or unreachable. */
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000,
-  });
-  return cached;
-}
-
-/** Log SMTP readiness at startup (does not block requests). */
-export async function logSmtpStatus() {
-  const transport = getTransport();
-  if (!transport) {
-    // eslint-disable-next-line no-console
-    console.warn('[mail] SMTP not configured (set SMTP_HOST and SMTP_USER on Render)');
-    return;
-  }
-  try {
-    await transport.verify();
-    // eslint-disable-next-line no-console
-    console.info('[mail] SMTP connection verified');
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error('[mail] SMTP verify failed — invite emails may not send', e);
-  }
-}
+import {
+  dispatchEmail,
+  escapeHtml,
+  getDefaultFrom,
+  getResendApiKey,
+  getSmtpTransport,
+} from './mailSender.js';
 
 const MAIL_SEND_TIMEOUT_MS = 20_000;
-const INVITE_MAIL_TIMEOUT_MS = 45_000;
+const INVITE_MAIL_TIMEOUT_MS = 25_000;
 
-async function sendMailWithTimeout(transport, mailOptions, timeoutMs = MAIL_SEND_TIMEOUT_MS) {
-  let timer;
-  try {
-    await Promise.race([
-      transport.sendMail(mailOptions),
-      new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`SMTP send timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
-    return true;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+/** @deprecated use getSmtpTransport from mailSender */
+export function getTransport() {
+  return getSmtpTransport();
+}
+
+function mailConfigured() {
+  return Boolean(getResendApiKey() || getSmtpTransport());
 }
 
 /**
@@ -85,8 +31,7 @@ async function sendMailWithTimeout(transport, mailOptions, timeoutMs = MAIL_SEND
  * }} payload
  */
 export async function sendTaskCompleteEmails(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const subject = `Completed: ${payload.taskTitle}`;
   const assigneeLabel = payload.assigneeName?.trim() || 'Unassigned';
   const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
@@ -142,18 +87,15 @@ export async function sendTaskCompleteEmails(payload) {
 </body>
 </html>`;
 
-  if (!transport || !payload.to?.length) {
-    console.info('[boards] Task complete (no SMTP or recipients):', text.replace(/\n/g, ' | '));
+  if (!mailConfigured() || !payload.to?.length) {
+    console.info('[boards] Task complete (no mail provider or recipients):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({
-      from,
-      to: payload.to.join(', '),
-      subject,
-      text,
-      html,
-    });
+    await dispatchEmail(
+      { from, to: payload.to, subject, text, html },
+      MAIL_SEND_TIMEOUT_MS,
+    );
     return true;
   } catch (e) {
     console.error('[boards] send mail failed', e);
@@ -165,8 +107,7 @@ export async function sendTaskCompleteEmails(payload) {
  * @param {{ to: string[]; ticketRef: string; title: string; locationName?: string | null }} payload
  */
 export async function sendTicketCompletedEmails(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const ref = payload.ticketRef || '—';
   const subject = `Ticket ${ref} completed`;
   const lines = [
@@ -178,18 +119,16 @@ export async function sendTicketCompletedEmails(payload) {
   if (payload.locationName) lines.push(`Location: ${payload.locationName}`);
   const text = lines.join('\n');
 
-  if (!transport || !payload.to?.length) {
+  if (!mailConfigured() || !payload.to?.length) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Ticket complete (no SMTP or recipients):', text.replace(/\n/g, ' | '));
+    console.info('[mail] Ticket complete (no mail provider or recipients):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({
-      from,
-      to: payload.to.join(', '),
-      subject,
-      text,
-    });
+    await dispatchEmail(
+      { from, to: payload.to, subject, text },
+      MAIL_SEND_TIMEOUT_MS,
+    );
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -226,8 +165,7 @@ function ticketViewUrl(ticketObjectId) {
  * }} payload
  */
 export async function sendNewPartnerTicketAdminEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const ref = payload.ticketRef || '—';
   const subject = `New ticket ${ref} from partner`;
   const ticketUrl = ticketViewUrl(payload.ticketId);
@@ -277,13 +215,13 @@ export async function sendNewPartnerTicketAdminEmail(payload) {
 </html>`;
 
   const recipients = [...new Set((payload.to ?? []).map((e) => String(e).trim()).filter(Boolean))];
-  if (!transport || recipients.length === 0) {
+  if (!mailConfigured() || recipients.length === 0) {
     // eslint-disable-next-line no-console
-    console.info('[mail] New partner ticket (no SMTP or recipients):', text.replace(/\n/g, ' | '));
+    console.info('[mail] New partner ticket (no mail provider or recipients):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({ from, to: recipients.join(', '), subject, text, html });
+    await dispatchEmail({ from, to: recipients, subject, text, html }, MAIL_SEND_TIMEOUT_MS);
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -293,8 +231,7 @@ export async function sendNewPartnerTicketAdminEmail(payload) {
 }
 
 export async function sendTicketAssignedEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const ref = payload.ticketRef || '—';
   const subject = `Ticket ${ref} assigned to you`;
   const ticketUrl = ticketViewUrl(payload.ticketId);
@@ -346,13 +283,13 @@ export async function sendTicketAssignedEmail(payload) {
 </body>
 </html>`;
 
-  if (!transport || !payload.to) {
+  if (!mailConfigured() || !payload.to) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Ticket assigned (no SMTP or recipient):', text.replace(/\n/g, ' | '));
+    console.info('[mail] Ticket assigned (no mail provider or recipient):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({ from, to: payload.to, subject, text, html });
+    await dispatchEmail({ from, to: payload.to, subject, text, html }, MAIL_SEND_TIMEOUT_MS);
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -371,8 +308,7 @@ export async function sendTicketAssignedEmail(payload) {
  * }} payload
  */
 export async function sendPortalInviteEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
   const loginUrl = base ? `${base}/login` : '/login';
   const subject = 'You have been invited to the Moka&Co portal';
@@ -426,14 +362,13 @@ export async function sendPortalInviteEmail(payload) {
 </body>
 </html>`;
 
-  if (!transport || !payload.to) {
+  if (!mailConfigured() || !payload.to) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Portal invite (no SMTP or recipient):', text.replace(/\n/g, ' | '));
+    console.info('[mail] Portal invite (no mail provider or recipient):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await sendMailWithTimeout(
-      transport,
+    await dispatchEmail(
       { from, to: payload.to, subject, text, html },
       INVITE_MAIL_TIMEOUT_MS,
     );
@@ -442,7 +377,7 @@ export async function sendPortalInviteEmail(payload) {
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
-    console.error('[mail] portal invite send failed', e);
+    console.error('[mail] portal invite send failed', e?.message || e);
     return false;
   }
 }
@@ -458,8 +393,7 @@ export async function sendPortalInviteEmail(payload) {
  * }} payload
  */
 export async function sendContactFormEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const to =
     payload.adminEmail?.trim()
     || process.env.ADMIN_EMAIL?.trim()
@@ -498,20 +432,23 @@ export async function sendContactFormEmail(payload) {
 </body>
 </html>`;
 
-  if (!transport) {
-    console.info('[mail] Contact form (no SMTP):', text.replace(/\n/g, ' | '));
+  if (!mailConfigured()) {
+    console.info('[mail] Contact form (no mail provider):', text.replace(/\n/g, ' | '));
     return false;
   }
 
   try {
-    await transport.sendMail({
-      from,
-      to,
-      subject: `[Contact] ${subject}`,
-      text,
-      html,
-      replyTo: payload.email,
-    });
+    await dispatchEmail(
+      {
+        from,
+        to,
+        subject: `[Contact] ${subject}`,
+        text,
+        html,
+        replyTo: payload.email,
+      },
+      MAIL_SEND_TIMEOUT_MS,
+    );
     return true;
   } catch (e) {
     console.error('[mail] contact form send failed', e);
@@ -531,8 +468,7 @@ export async function sendContactFormEmail(payload) {
  * }} payload
  */
 export async function sendBoardMentionEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const subject = `${payload.authorName} mentioned you on: ${payload.taskTitle || 'Board task'}`;
   const text = [
     `Hi ${payload.mentionedName},`,
@@ -562,19 +498,16 @@ export async function sendBoardMentionEmail(payload) {
 </body>
 </html>`;
 
-  if (!transport || !payload.to?.trim()) {
+  if (!mailConfigured() || !payload.to?.trim()) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Mention (no SMTP or to):', text.replace(/\n/g, ' | '));
+    console.info('[mail] Mention (no mail provider or to):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({
-      from,
-      to: payload.to.trim(),
-      subject,
-      text,
-      html,
-    });
+    await dispatchEmail(
+      { from, to: payload.to.trim(), subject, text, html },
+      MAIL_SEND_TIMEOUT_MS,
+    );
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console

@@ -2,14 +2,14 @@ import 'dotenv/config';
 import http from 'http';
 import app from './app.js';
 import { connectDb } from './config/db.js';
-import { logSmtpStatus } from './services/boardMailService.js';
+import { logMailProviderStatus } from './services/mailSender.js';
 import { attachSocketServer } from './realtime/socketServer.js';
 
 const PORT = Number(process.env.PORT) || 5000;
 
 async function bootstrap() {
   await connectDb();
-  void logSmtpStatus();
+  void logMailProviderStatus();
   const server = http.createServer(app);
   attachSocketServer(server);
   server.listen(PORT, () => {
