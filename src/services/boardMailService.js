@@ -16,8 +16,8 @@ import {
   renderLinkFallback,
 } from './emailTemplate.js';
 
-const MAIL_SEND_TIMEOUT_MS = 20_000;
-const INVITE_MAIL_TIMEOUT_MS = 25_000;
+const MAIL_SEND_TIMEOUT_MS = 60_000;
+const INVITE_MAIL_TIMEOUT_MS = 60_000;
 
 /** @deprecated use getSmtpTransport from mailSender */
 export function getTransport() {

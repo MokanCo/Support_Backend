@@ -2,7 +2,8 @@ import dns from 'node:dns';
 import net from 'node:net';
 import nodemailer from 'nodemailer';
 
-const DEFAULT_TIMEOUT_MS = 45_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
+const RENDER_MIN_TIMEOUT_MS = 55_000;
 
 function escapeHtml(s) {
   return String(s ?? '')
@@ -32,12 +33,29 @@ function isRenderHost() {
   );
 }
 
+function effectiveTimeoutMs(requestedMs) {
+  const base = requestedMs || DEFAULT_TIMEOUT_MS;
+  if (isRenderHost()) {
+    return Math.max(base, RENDER_MIN_TIMEOUT_MS);
+  }
+  return base;
+}
+
 function ipv4Lookup(hostname, _options, callback) {
   dns.lookup(hostname, { family: 4 }, callback);
 }
 
+export function getResendApiKey() {
+  return cleanEnv(process.env.RESEND_API_KEY);
+}
+
 export function getDefaultFrom() {
-  return cleanEnv(process.env.SMTP_FROM) || cleanEnv(process.env.SMTP_USER) || 'noreply@localhost';
+  return (
+    cleanEnv(process.env.RESEND_FROM)
+    || cleanEnv(process.env.SMTP_FROM)
+    || cleanEnv(process.env.SMTP_USER)
+    || 'noreply@localhost'
+  );
 }
 
 function normalizeRecipients(to) {
@@ -57,8 +75,18 @@ function smtpHost() {
   return cleanEnv(process.env.SMTP_HOST) || 'smtp.gmail.com';
 }
 
-/** Port / TLS combinations to try (465 first on Render — 587 often times out there). */
+/**
+ * On Render always try 465 (SSL) then 587 — ignore SMTP_PORT=587 there (587 often hangs).
+ * Locally honour SMTP_PORT when set.
+ */
 function smtpPortCandidates() {
+  if (isRenderHost()) {
+    return [
+      { port: 465, secure: true },
+      { port: 587, secure: false },
+    ];
+  }
+
   const explicit = cleanEnv(process.env.SMTP_PORT);
   if (explicit) {
     const port = Number(explicit);
@@ -67,13 +95,6 @@ function smtpPortCandidates() {
       || cleanEnv(process.env.SMTP_SECURE) === '1'
       || port === 465;
     return [{ port, secure }];
-  }
-
-  if (isRenderHost()) {
-    return [
-      { port: 465, secure: true },
-      { port: 587, secure: false },
-    ];
   }
 
   return [
@@ -93,26 +114,14 @@ function createSmtpTransport({ port, secure }) {
     secure,
     auth: creds,
     requireTLS: !secure && port === 587,
-    connectionTimeout: 30_000,
-    greetingTimeout: 30_000,
-    socketTimeout: 45_000,
+    connectionTimeout: 45_000,
+    greetingTimeout: 45_000,
+    socketTimeout: 60_000,
     tls: {
       servername: host,
       minVersion: 'TLSv1.2',
     },
     lookup: ipv4Lookup,
-  });
-}
-
-function createGmailServiceTransport() {
-  const creds = smtpCredentials();
-  if (!creds) return null;
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: creds,
-    connectionTimeout: 30_000,
-    greetingTimeout: 30_000,
-    socketTimeout: 45_000,
   });
 }
 
@@ -133,6 +142,45 @@ function testTcpReachable(host, port, timeoutMs = 12_000) {
       reject(err);
     });
   });
+}
+
+async function sendViaResendHttp({ from, to, subject, text, html, replyTo }, timeoutMs) {
+  const apiKey = getResendApiKey();
+  if (!apiKey) return false;
+
+  const recipients = normalizeRecipients(to);
+  if (recipients.length === 0) return false;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from,
+        to: recipients,
+        subject,
+        text: text || undefined,
+        html: html || undefined,
+        reply_to: replyTo || undefined,
+      }),
+      signal: controller.signal,
+    });
+
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = body?.message || body?.error || res.statusText;
+      throw new Error(`Resend API ${res.status}: ${msg}`);
+    }
+    return true;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Live SMTP + TCP diagnostics (for /health?verify=1). */
@@ -170,30 +218,18 @@ export async function verifyMailConnection() {
     }
   }
 
-  if (!smtpOk) {
-    const gmailTransport = createGmailServiceTransport();
-    if (gmailTransport) {
-      try {
-        await gmailTransport.verify();
-        smtpOk = true;
-        smtpVia = 'gmail-service';
-      } catch (e) {
-        lastError = e?.message || String(e);
-      }
-    }
-  }
-
   return {
     ok: smtpOk,
     tcp,
     smtpVerified: smtpOk,
     smtpVia,
+    resendAvailable: Boolean(getResendApiKey()),
     error: smtpOk ? null : lastError,
     hint: smtpOk
       ? null
       : tcp['465']?.ok === false && tcp['587']?.ok === false
-        ? 'Cannot reach Gmail SMTP from this server. Check Render instance type and Google Workspace SMTP settings.'
-        : 'TCP works but SMTP auth failed — regenerate Google App Password and update SMTP_PASS on Render.',
+        ? 'Gmail SMTP ports unreachable from Render. Add RESEND_API_KEY + RESEND_FROM as HTTPS fallback.'
+        : 'TCP reachable but SMTP auth failed — regenerate Google App Password for SMTP_PASS.',
     ...status,
   };
 }
@@ -205,25 +241,28 @@ export function getSmtpTransport() {
 }
 
 export function isMailConfigured() {
-  return Boolean(smtpCredentials());
+  return Boolean(smtpCredentials()) || Boolean(getResendApiKey());
 }
 
 export function getMailConfigStatus() {
-  const configured = isMailConfigured();
+  const smtp = Boolean(smtpCredentials());
+  const resend = Boolean(getResendApiKey());
   const candidates = smtpPortCandidates();
   const primary = candidates[0];
   return {
-    configured,
-    provider: 'smtp',
+    configured: smtp || resend,
+    provider: resend && !smtp ? 'resend' : smtp ? 'smtp' : null,
+    smtp,
+    resend,
     host: smtpHost(),
     port: primary.port,
     secure: primary.secure,
     portsTried: candidates.map((c) => c.port),
     render: isRenderHost(),
     from: getDefaultFrom(),
-    hint: configured
+    hint: smtp || resend
       ? null
-      : 'Set SMTP_USER and SMTP_PASS in environment variables.',
+      : 'Set SMTP_USER + SMTP_PASS, or RESEND_API_KEY + RESEND_FROM.',
   };
 }
 
@@ -265,17 +304,13 @@ export async function dispatchEmail(
   { from, to, subject, text, html, replyTo },
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ) {
-  const creds = smtpCredentials();
-  if (!creds) {
-    throw new Error('Mail not configured (set SMTP_USER + SMTP_PASS)');
-  }
-
   const mailFrom = from || getDefaultFrom();
   const recipients = normalizeRecipients(to);
   if (recipients.length === 0) {
     throw new Error('No recipients');
   }
 
+  const limit = effectiveTimeoutMs(timeoutMs);
   const mailOptions = {
     from: mailFrom,
     to: recipients.length === 1 ? recipients[0] : recipients,
@@ -285,50 +320,59 @@ export async function dispatchEmail(
     replyTo: replyTo || undefined,
   };
 
-  const host = smtpHost();
-  const candidates = smtpPortCandidates();
+  const creds = smtpCredentials();
   let lastError;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const cfg = candidates[i];
-    const transport = createSmtpTransport(cfg);
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await sendViaSmtp(transport, mailOptions, timeoutMs);
-      if (i > 0) {
+  if (creds) {
+    const host = smtpHost();
+    const candidates = smtpPortCandidates();
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const cfg = candidates[i];
+      const transport = createSmtpTransport(cfg);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await sendViaSmtp(transport, mailOptions, limit);
+        if (i > 0) {
+          // eslint-disable-next-line no-console
+          console.info(`[mail] Sent via ${host}:${cfg.port} (fallback)`);
+        }
+        return true;
+      } catch (err) {
+        lastError = err;
+        const hasNext = i < candidates.length - 1;
         // eslint-disable-next-line no-console
-        console.info(`[mail] Sent via ${host}:${cfg.port} (fallback)`);
+        console.error(
+          `[mail] SMTP failed ${host}:${cfg.port} (secure=${cfg.secure})`,
+          err?.message || err,
+        );
+        if (!isRetryableSmtpError(err) || !hasNext) {
+          break;
+        }
+        // eslint-disable-next-line no-console
+        console.warn(`[mail] Retrying SMTP on port ${candidates[i + 1].port}...`);
       }
-      return true;
-    } catch (err) {
-      lastError = err;
-      const retryable = isRetryableSmtpError(err);
-      const hasNext = i < candidates.length - 1;
-      // eslint-disable-next-line no-console
-      console.error(
-        `[mail] SMTP failed ${host}:${cfg.port} (secure=${cfg.secure})`,
-        err?.message || err,
-      );
-      if (!retryable || !hasNext) {
-        break;
-      }
-      // eslint-disable-next-line no-console
-      console.warn(`[mail] Retrying SMTP on port ${candidates[i + 1].port}...`);
     }
   }
 
-  const gmailTransport = createGmailServiceTransport();
-  if (gmailTransport) {
+  if (getResendApiKey()) {
     try {
-      await sendViaSmtp(gmailTransport, mailOptions, timeoutMs);
+      await sendViaResendHttp(
+        { from: mailFrom, to: recipients, subject, text, html, replyTo },
+        limit,
+      );
       // eslint-disable-next-line no-console
-      console.info('[mail] Sent via gmail-service (fallback)');
+      console.info('[mail] Sent via Resend HTTPS (SMTP fallback)');
       return true;
     } catch (err) {
       lastError = err;
       // eslint-disable-next-line no-console
-      console.error('[mail] Gmail service transport failed', err?.message || err);
+      console.error('[mail] Resend fallback failed', err?.message || err);
     }
+  }
+
+  if (!creds && !getResendApiKey()) {
+    throw new Error('Mail not configured (set SMTP_USER + SMTP_PASS or RESEND_API_KEY)');
   }
 
   throw lastError || new Error('SMTP send failed');
@@ -340,9 +384,16 @@ export async function logMailProviderStatus() {
 
   if (!status.configured) {
     // eslint-disable-next-line no-console
-    console.warn('[mail] SMTP not configured. Set SMTP_USER and SMTP_PASS.');
+    console.warn('[mail] Not configured. Set SMTP_USER + SMTP_PASS (or RESEND_API_KEY).');
     return;
   }
+
+  if (getResendApiKey()) {
+    // eslint-disable-next-line no-console
+    console.info('[mail] Resend HTTPS fallback available');
+  }
+
+  if (!smtpCredentials()) return;
 
   const host = smtpHost();
   let lastError;
@@ -364,25 +415,13 @@ export async function logMailProviderStatus() {
     }
   }
 
-  const gmailTransport = createGmailServiceTransport();
-  if (gmailTransport) {
-    try {
-      await gmailTransport.verify();
-      // eslint-disable-next-line no-console
-      console.info(`[mail] SMTP verified (gmail-service, from ${status.from})`);
-      return;
-    } catch (e) {
-      lastError = e;
-      // eslint-disable-next-line no-console
-      console.error('[mail] Gmail service verify failed', e?.message || e);
-    }
-  }
-
   // eslint-disable-next-line no-console
   console.error(
-    '[mail] All SMTP methods failed.',
+    '[mail] SMTP unavailable on all ports.',
     lastError?.message || lastError,
-    '→ Check SMTP_PASS (Google App Password) on Render and Google Admin → Apps → Google Workspace → Gmail → SMTP relay settings.',
+    getResendApiKey()
+      ? '→ Emails will use Resend HTTPS fallback when sending.'
+      : '→ Add RESEND_API_KEY + RESEND_FROM on Render for HTTPS fallback (port 443).',
   );
 }
 
