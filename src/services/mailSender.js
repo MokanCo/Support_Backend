@@ -1,8 +1,8 @@
 import nodemailer from 'nodemailer';
 
-let emailTransport;
+let smtpTransport;
 
-const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_TIMEOUT_MS = 25_000;
 
 function escapeHtml(s) {
   return String(s ?? '')
@@ -12,21 +12,20 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-/** Render web services block outbound SMTP (587/465). Use Resend (HTTPS) there. */
-export function isRenderDeployment() {
-  return Boolean(
-    process.env.RENDER
-    || process.env.RENDER_SERVICE_ID
-    || process.env.RENDER_SERVICE_NAME,
-  );
-}
-
-export function getResendApiKey() {
-  return process.env.RESEND_API_KEY?.trim() || '';
+function cleanEnv(value) {
+  if (value == null) return '';
+  const trimmed = String(value).trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
 }
 
 export function getDefaultFrom() {
-  return process.env.RESEND_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  return cleanEnv(process.env.SMTP_FROM) || cleanEnv(process.env.SMTP_USER) || 'noreply@localhost';
 }
 
 function normalizeRecipients(to) {
@@ -35,143 +34,61 @@ function normalizeRecipients(to) {
   return [...new Set(list.map((e) => String(e).trim()).filter(Boolean))];
 }
 
-function addressToString(addr) {
-  if (!addr) return '';
-  if (typeof addr === 'string') return addr.trim();
-  if (Array.isArray(addr)) {
-    return addr.map(addressToString).filter(Boolean).join(', ');
-  }
-  if (typeof addr === 'object' && addr.address) {
-    const name = addr.name ? String(addr.name).trim() : '';
-    return name ? `${name} <${addr.address}>` : addr.address;
-  }
-  return String(addr).trim();
-}
-
-function recipientsFromMailData(data) {
-  const raw = data.to ?? data.cc ?? data.bcc;
-  if (!raw) return [];
-  const list = Array.isArray(raw) ? raw : [raw];
-  return normalizeRecipients(
-    list.map((entry) => {
-      if (typeof entry === 'object' && entry?.address) return entry.address;
-      return addressToString(entry);
-    }),
-  );
-}
-
-async function sendViaResend({ from, to, subject, text, html, replyTo }, timeoutMs) {
-  const apiKey = getResendApiKey();
-  if (!apiKey) return false;
-
-  const recipients = normalizeRecipients(to);
-  if (recipients.length === 0) return false;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from,
-        to: recipients,
-        subject,
-        text: text || undefined,
-        html: html || undefined,
-        reply_to: replyTo || undefined,
-      }),
-      signal: controller.signal,
-    });
-
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const msg = body?.message || body?.error || res.statusText;
-      throw new Error(`Resend API ${res.status}: ${msg}`);
-    }
-    return { messageId: body?.id || `resend-${Date.now()}`, accepted: recipients };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Nodemailer transport that sends via Resend HTTPS API (works on Render). */
-function createResendTransport() {
-  return {
-    name: 'resend-http',
-    version: '1.0.0',
-    send(mail, callback) {
-      const data = mail.data;
-      const from = addressToString(data.from) || getDefaultFrom();
-      const to = recipientsFromMailData(data);
-      const replyTo = addressToString(data.replyTo) || undefined;
-
-      sendViaResend(
-        {
-          from,
-          to,
-          subject: data.subject || '(no subject)',
-          text: data.text,
-          html: data.html,
-          replyTo,
-        },
-        DEFAULT_TIMEOUT_MS,
-      )
-        .then((info) => callback(null, info))
-        .catch((err) => callback(err));
-    },
-  };
-}
-
-function createGmailTransport() {
-  const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASS?.trim();
-  if (!user || !pass) return null;
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user, pass },
-  });
-}
-
-/**
- * Single nodemailer transport: Resend (HTTPS) when RESEND_API_KEY is set,
- * else Gmail locally. Gmail SMTP is disabled on Render (ports blocked).
- */
 export function getSmtpTransport() {
-  if (emailTransport !== undefined) return emailTransport;
+  if (smtpTransport !== undefined) return smtpTransport;
 
-  if (getResendApiKey()) {
-    emailTransport = nodemailer.createTransport(createResendTransport());
-    return emailTransport;
-  }
-
-  if (isRenderDeployment()) {
-    emailTransport = null;
+  const user = cleanEnv(process.env.SMTP_USER);
+  const pass = cleanEnv(process.env.SMTP_PASS);
+  if (!user || !pass) {
+    smtpTransport = null;
     return null;
   }
 
-  emailTransport = createGmailTransport();
-  return emailTransport;
+  const host = cleanEnv(process.env.SMTP_HOST) || 'smtp.gmail.com';
+  const port = Number(cleanEnv(process.env.SMTP_PORT) || '587');
+  const secure =
+    cleanEnv(process.env.SMTP_SECURE).toLowerCase() === 'true'
+    || cleanEnv(process.env.SMTP_SECURE) === '1'
+    || port === 465;
+
+  smtpTransport = nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+    requireTLS: !secure && port === 587,
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 20_000,
+  });
+
+  return smtpTransport;
 }
 
 export function isMailConfigured() {
-  if (getResendApiKey()) return true;
-  if (isRenderDeployment()) return false;
-  return Boolean(process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim());
+  return Boolean(cleanEnv(process.env.SMTP_USER) && cleanEnv(process.env.SMTP_PASS));
 }
 
-async function sendViaTransport(transport, mailOptions, timeoutMs) {
+export function getMailConfigStatus() {
+  const configured = isMailConfigured();
+  return {
+    configured,
+    provider: 'smtp',
+    host: cleanEnv(process.env.SMTP_HOST) || 'smtp.gmail.com',
+    port: Number(cleanEnv(process.env.SMTP_PORT) || '587'),
+    from: getDefaultFrom(),
+    hint: configured ? null : 'Set SMTP_USER and SMTP_PASS in environment variables.',
+  };
+}
+
+async function sendViaSmtp(transport, mailOptions, timeoutMs) {
   let timer;
   try {
     await Promise.race([
       transport.sendMail(mailOptions),
       new Promise((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`Email send timed out after ${timeoutMs}ms`)),
+          () => reject(new Error(`SMTP send timed out after ${timeoutMs}ms`)),
           timeoutMs,
         );
       }),
@@ -182,20 +99,6 @@ async function sendViaTransport(transport, mailOptions, timeoutMs) {
   }
 }
 
-function mailNotConfiguredError() {
-  if (isRenderDeployment()) {
-    return new Error(
-      'Email on Render requires RESEND_API_KEY (and RESEND_FROM with a verified domain). '
-      + 'Gmail/nodemailer SMTP cannot run on Render — outbound ports 587/465 are blocked. '
-      + 'Sign up at https://resend.com, verify your domain, and add env vars in the Render dashboard.',
-    );
-  }
-  return new Error('Mail not configured (set RESEND_API_KEY or SMTP_USER + SMTP_PASS for local Gmail)');
-}
-
-/**
- * Send email via nodemailer (Resend HTTPS transport on Render, Gmail locally).
- */
 export async function dispatchEmail(
   { from, to, subject, text, html, replyTo },
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -208,10 +111,10 @@ export async function dispatchEmail(
 
   const transport = getSmtpTransport();
   if (!transport) {
-    throw mailNotConfiguredError();
+    throw new Error('Mail not configured (set SMTP_USER + SMTP_PASS)');
   }
 
-  return sendViaTransport(
+  return sendViaSmtp(
     transport,
     {
       from: mailFrom,
@@ -227,37 +130,24 @@ export async function dispatchEmail(
 
 /** Startup diagnostics — does not block HTTP. */
 export async function logMailProviderStatus() {
-  if (getResendApiKey()) {
+  const status = getMailConfigStatus();
+
+  if (!status.configured) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Resend API via nodemailer (HTTPS — works on Render)');
+    console.warn('[mail] SMTP not configured. Set SMTP_USER and SMTP_PASS.');
     return;
   }
 
-  if (isRenderDeployment()) {
-    // eslint-disable-next-line no-console
-    console.error(
-      '[mail] Render deployment detected but RESEND_API_KEY is missing. '
-      + 'Gmail SMTP will not work (ports 587/465 blocked). Add RESEND_API_KEY and RESEND_FROM in Render env.',
-    );
-    return;
-  }
-
-  const gmail = createGmailTransport();
-  if (!gmail) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      '[mail] No mail provider configured. Set RESEND_API_KEY (production/Render) or SMTP_USER + SMTP_PASS (local Gmail).',
-    );
-    return;
-  }
-
+  const transport = getSmtpTransport();
   try {
-    await gmail.verify();
+    await transport.verify();
     // eslint-disable-next-line no-console
-    console.info('[mail] Gmail (nodemailer) connection verified — local/dev only');
+    console.info(
+      `[mail] SMTP verified (${status.host}:${status.port}, from ${status.from})`,
+    );
   } catch (e) {
     // eslint-disable-next-line no-console
-    console.error('[mail] Gmail verify failed', e?.message || e);
+    console.error('[mail] SMTP verify failed', e?.message || e);
   }
 }
 
