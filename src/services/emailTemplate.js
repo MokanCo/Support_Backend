@@ -149,7 +149,12 @@ export function renderBrandedEmail({ bodyHtml, preheader = '' }) {
   ${preheaderBlock}
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" class="email-page-bg" style="background-color:${PAGE_BG};${pageBgInline}">
     <tr>
-      <td align="center" style="padding:36px 16px;">
+      <td align="right" valign="top" style="padding:24px 24px 0;">
+        ${logoBlock}
+      </td>
+    </tr>
+    <tr>
+      <td align="center" style="padding:24px 16px 36px;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:580px;margin:0 auto;">
           <tr>
             <td style="border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(61,38,27,0.08);">
@@ -159,15 +164,7 @@ export function renderBrandedEmail({ bodyHtml, preheader = '' }) {
                   <td style="padding:0;vertical-align:top;background-color:#ffffff;">
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:rgba(255,251,247,0.97);">
                       <tr>
-                        <td style="padding:28px 28px 32px 22px;">
-                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-                            <tr>
-                              <td style="font-size:0;line-height:0;">&nbsp;</td>
-                              <td align="right" valign="top" width="52" style="width:52px;padding-bottom:8px;">
-                                ${logoBlock}
-                              </td>
-                            </tr>
-                          </table>
+                        <td style="padding:28px 28px 32px;">
                           <div style="color:${TEXT_BLACK};">
                             ${bodyHtml}
                           </div>
