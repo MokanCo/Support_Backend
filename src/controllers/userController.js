@@ -1,5 +1,6 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { runInBackground } from '../utils/backgroundTasks.js';
+import { dispatchEmail } from '../services/mailSender.js';
 import { sendPortalInviteEmail } from '../services/boardMailService.js';
 import * as userService from '../services/userService.js';
 
@@ -42,5 +43,17 @@ export const updateUser = asyncHandler(async (req, res) => {
 export const deleteUser = asyncHandler(async (req, res) => {
   const result = await userService.deleteUserById(req.params.id);
   res.status(200).json(result);
+});
+
+export const mailTest = asyncHandler(async (req, res) => {
+  const to = typeof req.body?.to === 'string' && req.body.to.trim()
+    ? req.body.to.trim()
+    : req.user.email;
+  await dispatchEmail({
+    to,
+    subject: 'Mokanco portal — mail test',
+    text: `Mail test OK from ${process.env.RENDER_SERVICE_NAME || 'local'} at ${new Date().toISOString()}`,
+  });
+  res.status(200).json({ ok: true, to });
 });
 

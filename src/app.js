@@ -11,7 +11,8 @@ import boardApiRoutes from './routes/boardApiRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { mountSwagger } from './config/swagger.js';
-import { getMailConfigStatus } from './services/mailSender.js';
+import { getMailConfigStatus, verifyMailConnection } from './services/mailSender.js';
+import { asyncHandler } from './utils/asyncHandler.js';
 
 const app = express();
 
@@ -30,9 +31,17 @@ app.use(
 );
 app.use(express.json({ limit: '1mb' }));
 
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, mail: getMailConfigStatus() });
-});
+app.get(
+  '/health',
+  asyncHandler(async (req, res) => {
+    if (req.query.verify === '1' || req.query.verify === 'true') {
+      const mail = await verifyMailConnection();
+      res.json({ ok: mail.ok, mail });
+      return;
+    }
+    res.json({ ok: true, mail: getMailConfigStatus() });
+  }),
+);
 
 mountSwagger(app);
 
