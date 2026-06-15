@@ -13,7 +13,10 @@ function ticketScopeFilter(user) {
   }
   if (user.role === 'partner') {
     if (!user.locationId) return { _id: { $exists: false } };
-    return { locationId: new mongoose.Types.ObjectId(user.locationId) };
+    return {
+      locationId: new mongoose.Types.ObjectId(user.locationId),
+      createdBy: new mongoose.Types.ObjectId(user.id),
+    };
   }
   return {};
 }
@@ -39,7 +42,8 @@ function serializeRecentTicket(t, nameById) {
     locationId = String(loc);
   }
   const created = new Date(t.createdAt).getTime();
-  const isNew = Date.now() - created < 24 * 60 * 60 * 1000;
+  const isNewWithin24h = Date.now() - created < 24 * 60 * 60 * 1000;
+  const isNew = isNewWithin24h && t.status === 'in_queue';
   const deadline = t.deadline ? new Date(t.deadline).toISOString() : null;
 
   return {
@@ -49,7 +53,7 @@ function serializeRecentTicket(t, nameById) {
     description: String(t.description ?? ''),
     category: String(t.category ?? ''),
     status: t.status,
-    priority: t.priority ?? 'medium',
+    priority: t.priority ?? 'p2',
     progress: typeof t.progress === 'number' ? t.progress : 0,
     deadline,
     isOverdue: isOverdueTicket(t.deadline, t.status),

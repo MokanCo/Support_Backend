@@ -39,6 +39,20 @@ const ticketSchema = new mongoose.Schema(
     locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Location', required: true, index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    resolution: { type: String, default: '', trim: true },
+    completedAt: { type: Date, default: null },
+    resolutionBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    resolutionHistory: {
+      type: [
+        {
+          body: { type: String, required: true, trim: true },
+          authorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+          authorName: { type: String, required: true, trim: true },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true },
 );

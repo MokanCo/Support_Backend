@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import * as ticketController from '../controllers/ticketController.js';
 import * as ticketActivityController from '../controllers/ticketActivityController.js';
+import * as ticketInternalNoteController from '../controllers/ticketInternalNoteController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
+import { roleMiddleware } from '../middleware/roleMiddleware.js';
 import { validateRequest } from '../middleware/validate.js';
 import {
   bulkDeleteTicketValidators,
@@ -9,6 +11,9 @@ import {
   createTicketValidators,
   listTicketsQueryValidators,
   ticketIdParamValidators,
+  ticketInternalNoteCreateValidators,
+  ticketInternalNoteUpdateValidators,
+  ticketInternalNoteDeleteValidators,
   updateTicketValidators,
 } from '../utils/validators.js';
 
@@ -22,7 +27,7 @@ router.use(authMiddleware);
  *   post:
  *     tags: [Tickets]
  *     summary: Bulk update tickets
- *     description: Applies the same partial update to every ticket id listed. Respects role and location access; tickets at 100% progress cannot be updated.
+ *     description: Applies the same partial update to every ticket id listed. Respects role and location access; completed or cancelled tickets cannot be updated.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -35,7 +40,7 @@ router.use(authMiddleware);
  *             ids: ["507f1f77bcf86cd799439011"]
  *             updates:
  *               status: in_progress
- *               priority: high
+ *               priority: p2
  *     responses:
  *       200:
  *         description: Bulk result
@@ -64,7 +69,7 @@ router.use(authMiddleware);
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  *       403:
- *         description: Forbidden or ticket locked at 100% progress
+ *         description: Forbidden or ticket is completed/cancelled (read-only)
  *         content:
  *           application/json:
  *             schema:
@@ -174,7 +179,7 @@ router.post(
  *             title: VPN drops every hour
  *             description: Remote staff cannot stay connected.
  *             category: Network
- *             priority: high
+ *             priority: p2
  *             locationId: "64a1b2c3d4e5f6789012345"
  *     responses:
  *       201:
@@ -278,6 +283,120 @@ router.post('/:id/activity', ticketIdParamValidators, validateRequest, ticketAct
 
 /**
  * @swagger
+ * /api/tickets/{id}/internal-notes:
+ *   get:
+ *     tags: [Ticket internal notes]
+ *     summary: List internal notes for a ticket
+ *     description: Admin and support only. Partners never receive this data.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Notes oldest-first
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 notes:
+ *                   type: array
+ *                   items: { $ref: '#/components/schemas/TicketInternalNote' }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden }
+ *       404: { description: Ticket not found }
+ *   post:
+ *     tags: [Ticket internal notes]
+ *     summary: Add internal note
+ *     description: Admin and support only. Blocked when ticket is completed or cancelled.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [body]
+ *             properties:
+ *               body: { type: string, example: 'Called vendor — awaiting RMA.' }
+ *     responses:
+ *       201:
+ *         description: Created
+ *       400: { description: Validation error }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden or ticket closed }
+ *       404: { description: Ticket not found }
+ */
+router.get(
+  '/:id/internal-notes',
+  roleMiddleware(['admin', 'support']),
+  ticketIdParamValidators,
+  validateRequest,
+  ticketInternalNoteController.listInternalNotes,
+);
+router.post(
+  '/:id/internal-notes',
+  roleMiddleware(['admin', 'support']),
+  ticketInternalNoteCreateValidators,
+  validateRequest,
+  ticketInternalNoteController.createInternalNote,
+);
+
+/**
+ * @swagger
+ * /api/tickets/{id}/internal-notes/{noteId}:
+ *   patch:
+ *     tags: [Ticket internal notes]
+ *     summary: Edit an internal note
+ *     description: Author or admin. Blocked when ticket is closed.
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               body: { type: string }
+ *     responses:
+ *       200: { description: Updated note }
+ *       400: { description: Validation error }
+ *       403: { description: Forbidden }
+ *       404: { description: Not found }
+ *   delete:
+ *     tags: [Ticket internal notes]
+ *     summary: Delete internal note
+ *     description: Author or admin. Blocked when ticket is closed.
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Deleted }
+ *       403: { description: Forbidden }
+ *       404: { description: Not found }
+ */
+router.patch(
+  '/:id/internal-notes/:noteId',
+  roleMiddleware(['admin', 'support']),
+  ticketInternalNoteUpdateValidators,
+  validateRequest,
+  ticketInternalNoteController.updateInternalNote,
+);
+router.delete(
+  '/:id/internal-notes/:noteId',
+  roleMiddleware(['admin', 'support']),
+  ticketInternalNoteDeleteValidators,
+  validateRequest,
+  ticketInternalNoteController.deleteInternalNote,
+);
+
+/**
+ * @swagger
  * /api/tickets/{id}:
  *   get:
  *     tags: [Tickets]
@@ -333,7 +452,7 @@ router.post('/:id/activity', ticketIdParamValidators, validateRequest, ticketAct
  *   patch:
  *     tags: [Tickets]
  *     summary: Update ticket
- *     description: Cannot modify a ticket whose progress is already 100%.
+ *     description: Cannot modify a ticket that is completed or cancelled. To complete, progress must be 100% and `resolution` is required when setting status to completed.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -371,7 +490,7 @@ router.post('/:id/activity', ticketIdParamValidators, validateRequest, ticketAct
  *             schema:
  *               $ref: '#/components/schemas/ErrorMessage'
  *       403:
- *         description: Forbidden or locked at 100% progress
+ *         description: Forbidden or ticket read-only (completed/cancelled)
  *         content:
  *           application/json:
  *             schema:

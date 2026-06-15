@@ -28,6 +28,7 @@ const locationSchema = new mongoose.Schema(
     city: { type: String, default: '', trim: true },
     state: { type: String, default: '', trim: true },
     zip: { type: String, default: '', trim: true },
+    isDisabled: { type: Boolean, default: false, index: true },
   },
   { timestamps: true },
 );
