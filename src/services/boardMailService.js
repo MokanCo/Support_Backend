@@ -471,6 +471,119 @@ export async function sendContactFormEmail(payload) {
 }
 
 /**
+ * Tracking link email after onboarding request submission.
+ * @param {{
+ *   to: string;
+ *   name: string;
+ *   trackingUrl: string;
+ *   trackingToken: string;
+ * }} payload
+ */
+export async function sendOnboardingTrackingEmail(payload) {
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  const transport = getTransport();
+  const subject = 'Your Moka&Co location onboarding request';
+  const safeName = escapeHtml(payload.name);
+  const href = escapeHtml(payload.trackingUrl);
+
+  const text = [
+    `Hi ${payload.name},`,
+    '',
+    'Thank you for submitting your new location onboarding request.',
+    'Your request is under review by our team.',
+    '',
+    `Track your request: ${payload.trackingUrl}`,
+    '',
+    `Reference: ${payload.trackingToken}`,
+  ].join('\n');
+
+  const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
+    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hi <strong>${safeName}</strong>,</p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.55;">Thank you for submitting your new location onboarding request. Your request is under review by our team.</p>
+    <p style="margin:0 0 16px;font-size:14px;color:#555;">Use the link below to track progress:</p>
+    <a href="${href}" style="display:inline-block;padding:12px 28px;background:#2a2a2a;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">Track request</a>
+    <p style="margin:16px 0 0;font-size:13px;color:#666;">Reference: ${escapeHtml(payload.trackingToken)}</p>
+  </div>
+</body>
+</html>`;
+
+  if (!transport || !payload.to) {
+    console.info('[mail] Onboarding tracking (no SMTP or recipient):', text.replace(/\n/g, ' | '));
+    return false;
+  }
+  try {
+    await transport.sendMail({ from, to: payload.to, subject, text, html });
+    return true;
+  } catch (e) {
+    console.error('[mail] onboarding tracking send failed', e);
+    return false;
+  }
+}
+
+/**
+ * Notify admin of a new onboarding request.
+ * @param {{ request: Record<string, unknown>; trackingUrl: string }} payload
+ */
+export async function sendOnboardingAdminNotificationEmail(payload) {
+  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
+  const transport = getTransport();
+  const to =
+    process.env.ADMIN_EMAIL?.trim()
+    || process.env.SMTP_USER?.trim();
+  if (!to) return false;
+
+  const { request } = payload;
+  const personal = request.personal || {};
+  const location = request.location || {};
+  const subject = `New location onboarding: ${location.locationName || 'New request'}`;
+
+  const text = [
+    'New location onboarding request',
+    '',
+    `Applicant: ${personal.firstName} ${personal.lastName}`,
+    `Email: ${personal.email}`,
+    `Location: ${location.locationName}`,
+    `Location email: ${location.locationEmail}`,
+    `Opening date: ${location.openingDate}`,
+    `Services: ${(request.selectedServices || []).join(', ')}`,
+    '',
+    `Track: ${payload.trackingUrl}`,
+  ].join('\n');
+
+  const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:16px;background:#f4f4f5;font-family:system-ui,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;padding:20px 24px;border-radius:8px;border:1px solid #e5e5e5;">
+    <p style="margin:0 0 12px;font-size:18px;font-weight:600;">New location onboarding request</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Applicant</strong><br>${escapeHtml(`${personal.firstName} ${personal.lastName}`)}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Email</strong><br>${escapeHtml(personal.email)}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Location</strong><br>${escapeHtml(location.locationName)}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Opening date</strong><br>${escapeHtml(location.openingDate)}</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Services</strong><br>${escapeHtml((request.selectedServices || []).join(', '))}</p>
+    <a href="${escapeHtml(payload.trackingUrl)}" style="display:inline-block;margin-top:12px;padding:10px 20px;background:#2a2a2a;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">View tracking</a>
+  </div>
+</body>
+</html>`;
+
+  if (!transport) {
+    console.info('[mail] Onboarding admin notify (no SMTP):', text.replace(/\n/g, ' | '));
+    return false;
+  }
+  try {
+    await transport.sendMail({ from, to, subject, text, html });
+    return true;
+  } catch (e) {
+    console.error('[mail] onboarding admin notify failed', e);
+    return false;
+  }
+}
+
+/**
  * Email when a user is @mentioned in a board task comment.
  * @param {{
  *   to: string;

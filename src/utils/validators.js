@@ -219,3 +219,136 @@ export const contactFormValidators = [
     .withMessage('adminEmail must be a valid email')
     .normalizeEmail(),
 ];
+
+const personalInfoValidators = [
+  body('personal.firstName').isString().trim().notEmpty().withMessage('personal.firstName is required'),
+  body('personal.lastName').isString().trim().notEmpty().withMessage('personal.lastName is required'),
+  body('personal.email').isEmail().withMessage('Valid personal.email is required').normalizeEmail(),
+  body('personal.phone').isString().trim().notEmpty().withMessage('personal.phone is required'),
+  body('personal.address').isString().trim().notEmpty().withMessage('personal.address is required'),
+  body('personal.city').isString().trim().notEmpty().withMessage('personal.city is required'),
+  body('personal.state').isString().trim().notEmpty().withMessage('personal.state is required'),
+  body('personal.zip').isString().trim().notEmpty().withMessage('personal.zip is required'),
+];
+
+const locationInfoValidators = [
+  body('location.locationName').isString().trim().notEmpty().withMessage('location.locationName is required'),
+  body('location.locationEmail').isEmail().withMessage('Valid location.locationEmail is required').normalizeEmail(),
+  body('location.locationPhone').isString().trim().notEmpty().withMessage('location.locationPhone is required'),
+  body('location.openingDate')
+    .isString()
+    .trim()
+    .matches(/^\d{4}-\d{2}-\d{2}$/)
+    .withMessage('location.openingDate must be YYYY-MM-DD'),
+  body('location.address').isString().trim().notEmpty().withMessage('location.address is required'),
+  body('location.city').isString().trim().notEmpty().withMessage('location.city is required'),
+  body('location.state').isString().trim().notEmpty().withMessage('location.state is required'),
+  body('location.zip').isString().trim().notEmpty().withMessage('location.zip is required'),
+];
+
+export const submitOnboardingValidators = [
+  ...personalInfoValidators,
+  ...locationInfoValidators,
+  body('trackingToken').optional().isString().trim().isLength({ min: 16, max: 128 }),
+  body('selectedServices')
+    .optional()
+    .isArray({ min: 1 })
+    .withMessage('selectedServices must be a non-empty array when provided'),
+  body('selectedServices.*').optional().isString().trim().notEmpty(),
+];
+
+export const draftOnboardingValidators = [
+  ...personalInfoValidators,
+  ...locationInfoValidators,
+  body('trackingToken').optional().isString().trim().isLength({ min: 16, max: 128 }),
+];
+
+export const onboardingTrackingTokenValidators = [
+  param('token').isString().trim().isLength({ min: 16, max: 128 }).withMessage('Invalid tracking token'),
+];
+
+export const updateDraftServicesValidators = [
+  ...onboardingTrackingTokenValidators,
+  body('selectedServices').isArray().withMessage('selectedServices must be an array'),
+  body('selectedServices.*').isString().trim().notEmpty().withMessage('Each service id must be a string'),
+];
+
+export const onboardingRequestIdValidators = [
+  param('id').isMongoId().withMessage('Invalid onboarding request id'),
+];
+
+export const listOnboardingRequestsValidators = [
+  query('status').optional().isIn(['pending', 'in_progress', 'completed', 'rejected']),
+  query('service').optional().isString().trim(),
+  query('search').optional().isString().trim(),
+  query('sort').optional().isIn(['createdAt', 'submittedAt', 'updatedAt', 'status']),
+  query('order').optional().isIn(['asc', 'desc']),
+  query('page').optional().isInt({ min: 1 }),
+  query('pageSize').optional().isInt({ min: 1, max: MAX_TICKET_LIST_PAGE_SIZE }),
+];
+
+export const updateOnboardingTaskValidators = [
+  param('id').isMongoId().withMessage('Invalid request id'),
+  param('taskId').isMongoId().withMessage('Invalid task id'),
+  body('completed').optional().isBoolean(),
+  body('publicComment').optional().isString().trim().isLength({ max: 5000 }),
+  body('internalNote').optional().isString().trim().isLength({ max: 5000 }),
+  body('issueDescription').optional().isString().trim().isLength({ max: 5000 }),
+  body('resolution').optional().isString().trim().isLength({ max: 5000 }),
+  body('attachmentUrl').optional().isString().trim().isLength({ max: 2000 }),
+];
+
+export const rejectOnboardingValidators = [
+  ...onboardingRequestIdValidators,
+  body('reviewNotes').optional().isString().trim().isLength({ max: 2000 }),
+];
+
+export const reviewOnboardingValidators = [
+  ...onboardingRequestIdValidators,
+  body('status').isIn(['approved', 'rejected', 'in_progress']).withMessage('status must be approved, in_progress, or rejected'),
+  body('reviewNotes').optional().isString().trim().isLength({ max: 2000 }),
+];
+
+export const updateOnboardingConfigValidators = [
+  body('brandName').optional().isString().trim().isLength({ max: 120 }),
+  body('welcomeTitle').optional().isString().trim().isLength({ max: 200 }),
+  body('welcomeDescription').optional().isString().trim().isLength({ max: 2000 }),
+  body('wizardTitle').optional().isString().trim().isLength({ max: 200 }),
+  body('wizardSidebarTitle').optional().isString().trim().isLength({ max: 200 }),
+  body('wizardSidebarDescription').optional().isString().trim().isLength({ max: 2000 }),
+  body('stepLabels').optional().isArray({ min: 1, max: 10 }),
+  body('stepLabels.*').optional().isString().trim().notEmpty(),
+  body('welcomeSteps').optional().isArray({ min: 1, max: 10 }),
+  body('welcomeSteps.*.num').optional().isInt({ min: 1, max: 20 }),
+  body('welcomeSteps.*.label').optional().isString().trim().notEmpty(),
+  body('stepSubtitles').optional().isObject(),
+  body('successTitle').optional().isString().trim().isLength({ max: 200 }),
+  body('successDescription').optional().isString().trim().isLength({ max: 2000 }),
+  body('successEmailNote').optional().isString().trim().isLength({ max: 2000 }),
+  body('enabled').optional().isBoolean(),
+];
+
+export const createOnboardingServiceValidators = [
+  body('slug').isString().trim().notEmpty().isLength({ max: 60 }).withMessage('slug is required'),
+  body('title').isString().trim().notEmpty().isLength({ max: 120 }).withMessage('title is required'),
+  body('section').isString().trim().notEmpty().isLength({ max: 120 }).withMessage('section is required'),
+  body('iconKey').isString().trim().notEmpty().withMessage('iconKey is required'),
+  body('iconClass').isString().trim().notEmpty().withMessage('iconClass is required'),
+  body('sortOrder').optional().isInt({ min: 0, max: 9999 }),
+  body('isActive').optional().isBoolean(),
+];
+
+export const updateOnboardingServiceValidators = [
+  param('id').isMongoId().withMessage('Invalid service id'),
+  body('slug').optional().isString().trim().notEmpty().isLength({ max: 60 }),
+  body('title').optional().isString().trim().notEmpty().isLength({ max: 120 }),
+  body('section').optional().isString().trim().notEmpty().isLength({ max: 120 }),
+  body('iconKey').optional().isString().trim().isLength({ max: 40 }),
+  body('iconClass').optional().isString().trim().isLength({ max: 120 }),
+  body('sortOrder').optional().isInt({ min: 0, max: 9999 }),
+  body('isActive').optional().isBoolean(),
+];
+
+export const deleteOnboardingServiceValidators = [
+  param('id').isMongoId().withMessage('Invalid service id'),
+];

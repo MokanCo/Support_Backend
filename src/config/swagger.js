@@ -25,6 +25,7 @@ const swaggerDefinition = {
     { name: 'Tickets', description: 'Support tickets' },
     { name: 'Ticket internal notes', description: 'Staff-only notes on tickets (admin & support)' },
     { name: 'Messages', description: 'Ticket conversation messages' },
+    { name: 'Onboarding', description: 'Public location onboarding wizard and admin review' },
     { name: 'System', description: 'Operational endpoints' },
   ],
   components: {
@@ -279,6 +280,75 @@ const swaggerDefinition = {
         properties: {
           ticketId: { type: 'string' },
           text: { type: 'string', example: 'We are looking into this now.' },
+        },
+      },
+      SubmitOnboardingRequest: {
+        type: 'object',
+        required: ['personal', 'location', 'selectedServices'],
+        properties: {
+          personal: {
+            type: 'object',
+            required: ['firstName', 'lastName', 'email', 'phone', 'address', 'city', 'state', 'zip'],
+            properties: {
+              firstName: { type: 'string', example: 'Jane' },
+              lastName: { type: 'string', example: 'Doe' },
+              email: { type: 'string', format: 'email', example: 'jane@example.com' },
+              phone: { type: 'string', example: '(555) 123-4567' },
+              address: { type: 'string', example: '123 Main St' },
+              city: { type: 'string', example: 'Austin' },
+              state: { type: 'string', example: 'TX' },
+              zip: { type: 'string', example: '78701' },
+            },
+          },
+          location: {
+            type: 'object',
+            required: [
+              'locationName',
+              'locationEmail',
+              'locationPhone',
+              'openingDate',
+              'address',
+              'city',
+              'state',
+              'zip',
+            ],
+            properties: {
+              locationName: { type: 'string', example: 'Moka Downtown' },
+              locationEmail: { type: 'string', format: 'email', example: 'downtown@moka.example' },
+              locationPhone: { type: 'string', example: '(555) 987-6543' },
+              openingDate: { type: 'string', format: 'date', example: '2026-07-01' },
+              address: { type: 'string', example: '456 Coffee Ave' },
+              city: { type: 'string', example: 'Austin' },
+              state: { type: 'string', example: 'TX' },
+              zip: { type: 'string', example: '78702' },
+            },
+          },
+          selectedServices: {
+            type: 'array',
+            items: { type: 'string' },
+            example: ['google', 'yelp', 'facebook'],
+          },
+        },
+      },
+      CreateOnboardingServiceRequest: {
+        type: 'object',
+        required: ['slug', 'title', 'section'],
+        properties: {
+          slug: { type: 'string', example: 'google' },
+          title: { type: 'string', example: 'Google' },
+          section: { type: 'string', example: 'Business Listing' },
+          iconKey: { type: 'string', example: 'globe' },
+          iconClass: { type: 'string', example: 'bg-blue-100 text-blue-600' },
+          sortOrder: { type: 'integer', example: 0 },
+          isActive: { type: 'boolean', example: true },
+        },
+      },
+      ReviewOnboardingRequest: {
+        type: 'object',
+        required: ['status'],
+        properties: {
+          status: { type: 'string', enum: ['approved', 'rejected'] },
+          reviewNotes: { type: 'string', example: 'Approved — welcome to the network.' },
         },
       },
     },
