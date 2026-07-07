@@ -262,8 +262,9 @@ router.get(
   onboardingController.trackRequest,
 );
 
+// All admin routes require authentication; support can read + update tasks
 router.use(authMiddleware);
-router.use(roleMiddleware(['admin']));
+router.use(roleMiddleware(['admin', 'support']));
 
 /**
  * @swagger
@@ -521,8 +522,10 @@ router.patch(
   onboardingController.reviewRequest,
 );
 
+// Admin-only: approve, reject, provision, sync
 router.post(
   '/admin/requests/:id/approve',
+  roleMiddleware(['admin']),
   onboardingRequestIdValidators,
   validateRequest,
   onboardingController.approveRequest,
@@ -530,11 +533,21 @@ router.post(
 
 router.post(
   '/admin/requests/:id/reject',
+  roleMiddleware(['admin']),
   rejectOnboardingValidators,
   validateRequest,
   onboardingController.rejectRequest,
 );
 
+router.post(
+  '/admin/requests/:id/provision',
+  roleMiddleware(['admin']),
+  onboardingRequestIdValidators,
+  validateRequest,
+  onboardingController.provisionRequest,
+);
+
+// Admin + support: update tasks
 router.patch(
   '/admin/requests/:id/tasks/:taskId',
   updateOnboardingTaskValidators,
@@ -542,6 +555,6 @@ router.patch(
   onboardingController.updateTask,
 );
 
-router.post('/admin/templates/sync', onboardingController.syncTemplates);
+router.post('/admin/templates/sync', roleMiddleware(['admin']), onboardingController.syncTemplates);
 
 export default router;

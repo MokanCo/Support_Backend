@@ -7,6 +7,7 @@ import {
   sendOnboardingAdminNewRequestEmail,
 } from './onboardingMailService.js';
 import { logActivity, buildTrackingUrl as mgmtTrackingUrl } from './onboardingManagementService.js';
+import { createOnboardingNewRequestNotification } from './notificationService.js';
 
 function formatConfig(doc) {
   const subtitles = doc.stepSubtitles instanceof Map
@@ -310,10 +311,15 @@ export async function createOrUpdateDraftRequest(input) {
  * Save service selections immediately when the user toggles a service.
  */
 export async function updateDraftServices(token, selectedServices) {
-  const request = await findDraftByToken(token);
   const validated = await validateSelectedServices(selectedServices, { allowEmpty: true });
-  request.selectedServices = validated;
-  await request.save();
+  const request = await OnboardingRequest.findOneAndUpdate(
+    { trackingToken: token.trim(), status: 'draft' },
+    { $set: { selectedServices: validated } },
+    { new: true },
+  );
+  if (!request) {
+    throw new AppError('Draft onboarding request not found', 404);
+  }
   return { request: formatRequest(request) };
 }
 
@@ -353,6 +359,17 @@ export async function finalizeOnboardingRequest(token) {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[onboardingService] admin notification failed', e);
+  }
+
+  try {
+    await createOnboardingNewRequestNotification({
+      requestId: String(request._id),
+      locationName: request.location.locationName,
+      ownerName,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[onboardingService] onboarding socket notification failed', e);
   }
 
   return {
@@ -418,6 +435,17 @@ export async function submitOnboardingRequest(input) {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[onboardingService] admin notification failed', e);
+  }
+
+  try {
+    await createOnboardingNewRequestNotification({
+      requestId: String(request._id),
+      locationName: request.location.locationName,
+      ownerName,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[onboardingService] onboarding socket notification failed', e);
   }
 
   return {

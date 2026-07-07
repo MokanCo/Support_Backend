@@ -217,18 +217,10 @@ export async function syncServiceTemplates() {
       );
     }
 
-    const removed = await OnboardingTaskTemplate.find({
+    await OnboardingTaskTemplate.deleteMany({
       serviceSlug: def.slug,
       title: { $nin: def.tasks },
-    }).lean();
-
-    for (const old of removed) {
-      const inUse = await OnboardingRequestTask.exists({ taskTemplateId: old._id });
-      if (!inUse) {
-        // eslint-disable-next-line no-await-in-loop
-        await OnboardingTaskTemplate.deleteOne({ _id: old._id });
-      }
-    }
+    });
 
     results.push({ slug: def.slug, title: def.title, taskCount: def.tasks.length });
   }

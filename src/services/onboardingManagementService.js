@@ -60,6 +60,8 @@ function formatRequestRow(doc) {
     reviewNotes: doc.reviewNotes ?? '',
     reviewedByName: doc.reviewedByName ?? '',
     reviewedAt: doc.reviewedAt ?? null,
+    locationId: doc.locationId ? String(doc.locationId) : null,
+    userId: doc.userId ? String(doc.userId) : null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -280,27 +282,6 @@ export async function approveRequest(id, reviewer) {
   request.reviewedBy = reviewer.id;
   request.reviewedByName = reviewer.name ?? 'Admin';
   request.progressPercent = 0;
-
-  const loc = await locationService.createLocation({
-    name: request.location.locationName,
-    email: request.location.locationEmail,
-    phone: request.location.locationPhone,
-    address: request.location.address,
-    city: request.location.city,
-    state: request.location.state,
-    zip: request.location.zip,
-  });
-  request.locationId = loc.id;
-
-  const fullName = ownerName(request);
-  const user = await userService.createUser({
-    name: fullName,
-    email: request.personal.email,
-    role: 'partner',
-    locationId: loc.id,
-    sendInvite: true,
-  });
-  request.userId = user.id;
 
   await request.save();
 
@@ -541,7 +522,7 @@ export async function getPublicTracking(token) {
     ? Math.round((completedTasks / totalTasks) * 100)
     : 0);
 
-  return {
+  const responseData = {
     request: {
       trackingId: request.trackingId ?? null,
       status: request.status,
@@ -552,12 +533,112 @@ export async function getPublicTracking(token) {
       lastUpdated: refreshed?.updatedAt ?? request.updatedAt,
       submittedAt: request.submittedAt ?? request.createdAt,
       approvedAt: request.approvedAt ?? null,
+      openingDate: request.location?.openingDate ?? null,
     },
     services,
     serviceSections,
     activities: activities.map(formatActivity),
     progress: { percent: progressPercent, totalTasks, completedTasks },
   };
+
+  // Deactivate tracking link only when ALL four conditions are met:
+  // 1. opening date has arrived  2. location provisioned  3. user provisioned  4. all tasks done
+  const openingDateVal = request.location?.openingDate ? new Date(request.location.openingDate) : null;
+  const openingDatePassed = openingDateVal && !Number.isNaN(openingDateVal.getTime()) && openingDateVal <= new Date();
+  const allTasksDone = totalTasks > 0 && completedTasks === totalTasks;
+  if (
+    openingDatePassed &&
+    request.locationId &&
+    request.userId &&
+    allTasksDone
+  ) {
+    await OnboardingRequest.updateOne(
+      { _id: request._id },
+      { $unset: { trackingToken: '' } },
+    ).catch(() => {});
+  }
+
+  return responseData;
+}
+
+/**
+ * Admin manually provisions location + user for an approved onboarding request.
+ * Only allowed when: status is in_progress, opening date has arrived, all tasks done.
+ */
+export async function provisionRequest(id, reviewer) {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new AppError('Invalid onboarding request id', 400);
+  }
+  const request = await OnboardingRequest.findById(id);
+  if (!request) throw new AppError('Onboarding request not found', 404);
+  if (!['in_progress', 'completed'].includes(request.status)) {
+    throw new AppError('Only approved (in-progress) requests can be provisioned', 409);
+  }
+  if (request.locationId && request.userId) {
+    throw new AppError('Location and user are already provisioned for this request', 409);
+  }
+
+  // Check opening date
+  const openingDate = request.location?.openingDate ? new Date(request.location.openingDate) : null;
+  if (!openingDate || Number.isNaN(openingDate.getTime())) {
+    throw new AppError('This request has no opening date set', 400);
+  }
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+  if (openingDate > today) {
+    throw new AppError(`Opening date has not arrived yet (${request.location.openingDate})`, 409);
+  }
+
+  // Check all tasks completed
+  const [total, completed] = await Promise.all([
+    OnboardingRequestTask.countDocuments({ requestId: request._id }),
+    OnboardingRequestTask.countDocuments({ requestId: request._id, completed: true }),
+  ]);
+  if (total === 0 || completed < total) {
+    throw new AppError(`All service tasks must be completed first (${completed}/${total} done)`, 409);
+  }
+
+  let locationId = request.locationId ? String(request.locationId) : null;
+  let userId = request.userId ? String(request.userId) : null;
+
+  if (!locationId) {
+    const loc = await locationService.createLocation({
+      name: request.location.locationName,
+      email: request.location.locationEmail,
+      phone: request.location.locationPhone,
+      address: request.location.address,
+      city: request.location.city,
+      state: request.location.state,
+      zip: request.location.zip,
+    });
+    locationId = loc.id;
+    request.locationId = locationId;
+  }
+
+  if (!userId) {
+    const user = await userService.createUser({
+      name: ownerName(request),
+      email: request.personal.email,
+      role: 'partner',
+      locationId,
+      sendInvite: true,
+    });
+    userId = user.id;
+    request.userId = userId;
+  }
+
+  await request.save();
+
+  await logActivity(request._id, {
+    eventType: 'provisioned',
+    title: 'Location & User Created',
+    description: `Portal access provisioned by ${reviewer.name ?? 'admin'}.`,
+    isPublic: true,
+    createdBy: reviewer.id,
+    createdByName: reviewer.name ?? '',
+  });
+
+  return { request: formatRequestRow(request) };
 }
 
 export { buildTrackingUrl, formatRequestRow };

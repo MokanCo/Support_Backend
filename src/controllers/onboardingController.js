@@ -106,6 +106,12 @@ export const updateTask = asyncHandler(async (req, res) => {
   res.status(200).json(result);
 });
 
+export const provisionRequest = asyncHandler(async (req, res) => {
+  const { provisionRequest: provision } = await import('../services/onboardingManagementService.js');
+  const result = await provision(req.params.id, req.user);
+  res.status(200).json(result);
+});
+
 export const syncTemplates = asyncHandler(async (_req, res) => {
   const { syncServiceTemplates } = await import('../services/onboardingTemplateService.js');
   const result = await syncServiceTemplates();
