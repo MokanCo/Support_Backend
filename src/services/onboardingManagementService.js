@@ -133,10 +133,15 @@ export async function recalculateProgress(requestId) {
   const request = await OnboardingRequest.findById(requestId);
   if (!request) return { progressPercent, total, completed };
 
-  request.progressPercent = progressPercent;
   if (progressPercent === 100 && request.status === 'in_progress') {
-    request.status = 'completed';
-    request.completedAt = new Date();
+    const trackingUrl = buildTrackingUrl(request.trackingToken);
+    await OnboardingRequest.updateOne(
+      { _id: requestId },
+      {
+        $set: { progressPercent: 100, status: 'completed', completedAt: new Date() },
+        $unset: { trackingToken: '' },
+      },
+    );
     await logActivity(requestId, {
       eventType: 'completed',
       title: 'Onboarding Completed',
@@ -149,13 +154,15 @@ export async function recalculateProgress(requestId) {
         ownerName: ownerName(request),
         locationName: request.location.locationName,
         trackingId: request.trackingId,
-        trackingUrl: buildTrackingUrl(request.trackingToken),
+        trackingUrl,
       });
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[onboardingManagement] completion email failed', e);
     }
+    return { progressPercent, total, completed, status: 'completed' };
   }
+  request.progressPercent = progressPercent;
   await request.save();
   return { progressPercent, total, completed, status: request.status };
 }
@@ -454,7 +461,7 @@ export async function updateRequestTask(requestId, taskId, patch, reviewer) {
 export async function getPublicTracking(token) {
   const request = await OnboardingRequest.findOne({
     trackingToken: token.trim(),
-    status: { $in: ['pending', 'in_progress', 'completed', 'rejected'] },
+    status: { $in: ['pending', 'in_progress'] },
   }).lean();
   if (!request) throw new AppError('Onboarding not found', 404);
 
@@ -541,17 +548,9 @@ export async function getPublicTracking(token) {
     progress: { percent: progressPercent, totalTasks, completedTasks },
   };
 
-  // Deactivate tracking link only when ALL four conditions are met:
-  // 1. opening date has arrived  2. location provisioned  3. user provisioned  4. all tasks done
-  const openingDateVal = request.location?.openingDate ? new Date(request.location.openingDate) : null;
-  const openingDatePassed = openingDateVal && !Number.isNaN(openingDateVal.getTime()) && openingDateVal <= new Date();
+  // Expire tracking link when all tasks are completed
   const allTasksDone = totalTasks > 0 && completedTasks === totalTasks;
-  if (
-    openingDatePassed &&
-    request.locationId &&
-    request.userId &&
-    allTasksDone
-  ) {
+  if (allTasksDone) {
     await OnboardingRequest.updateOne(
       { _id: request._id },
       { $unset: { trackingToken: '' } },

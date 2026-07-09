@@ -17,7 +17,14 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconKey: "globe",
     iconClass: "bg-blue-100 text-blue-600",
     sortOrder: 0,
-    tasks: ["Website URL Added", "Phone Number"],
+    tasks: [
+      "Listing Creation",
+      "Listing Optimization",
+      "Verification request submitted",
+      "Verification Completed",
+      "Live listing Check",
+      "Business Verified on Google",
+    ],
   },
   {
     slug: "apple",
@@ -27,10 +34,12 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconClass: "bg-slate-100 text-slate-700",
     sortOrder: 1,
     tasks: [
+      "Listing Creation",
+      "Listing Optimization",
+      "Verification request submitted",
+      "Verification Completed",
+      "Live listing Check",
       "Business Verified on Apple",
-      "Ownership Verified",
-      "Logo Updated",
-      "Hours Updated",
     ],
   },
   {
@@ -41,10 +50,12 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconClass: "bg-red-100 text-red-700",
     sortOrder: 2,
     tasks: [
+      "Listing Creation",
+      "Listing Optimization",
+      "Verification request submitted",
+      "Verification Completed",
+      "Live listing Check",
       "Business Verified on Yelp",
-      "Ownership Verified",
-      "Logo Updated",
-      "Hours Updated",
     ],
   },
 
@@ -56,7 +67,12 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconKey: "globe",
     iconClass: "bg-sky-100 text-sky-700",
     sortOrder: 3,
-    tasks: ["Location is Activated on Website"],
+    tasks: [
+      "Location Listed on website",
+      "Hours Updated",
+      "Redirection Links Added",
+      "Forms Integrated",
+    ],
   },
 
   // ── Geo Tagging Listing ───────────────────────────────────────────────────
@@ -68,10 +84,11 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconClass: "bg-blue-100 text-blue-700",
     sortOrder: 4,
     tasks: [
-      "Store Information Verified",
-      "Address Confirmed",
-      "Hours Confirmed",
-      "Store Created",
+      "Store Location Creation",
+      "Store Optimization",
+      "Location Publishing",
+      "Geo Tag Verification",
+      "Store Live on Facebook",
     ],
   },
   {
@@ -82,10 +99,11 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconClass: "bg-pink-100 text-pink-700",
     sortOrder: 5,
     tasks: [
-      "Store Information Verified",
-      "Address Confirmed",
-      "Hours Confirmed",
-      "Store Created",
+      "Store Location Creation",
+      "Store Optimization",
+      "Location Publishing",
+      "Geo Tag Verification",
+      "Store Live on Instagram",
     ],
   },
   {
@@ -96,10 +114,11 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconClass: "bg-slate-100 text-slate-900",
     sortOrder: 6,
     tasks: [
-      "Store Information Verified",
-      "Address Confirmed",
-      "Hours Confirmed",
-      "Store Created",
+      "Store Location Creation",
+      "Store Optimization",
+      "Location Publishing",
+      "Geo Tag Verification",
+      "Store Live on TikTok",
     ],
   },
 
@@ -112,25 +131,8 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconClass: "bg-violet-100 text-violet-700",
     sortOrder: 8,
     tasks: [
-      "Account Created",
-      "Menu Configured",
-      "Branding Applied",
-      "Ordering Activated",
-      "Loyalty Program Set Up",
-    ],
-  },
-
-  // ── Delivery Services ─────────────────────────────────────────────────────
-  {
-    slug: "delivery",
-    title: "Delivery & Ordering App",
-    section: "Delivery Services",
-    iconKey: "smartphone",
-    iconClass: "bg-violet-100 text-violet-700",
-    sortOrder: 9,
-    tasks: [
-      "Location Listed on App",
-      "Hours Updated on App",
+      "Location Registered in Appfront",
+      "Information Verified",
       "Ready to Receive Orders",
       "Loyalty Activated",
     ],

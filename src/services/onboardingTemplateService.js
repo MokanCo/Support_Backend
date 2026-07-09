@@ -132,39 +132,57 @@ export async function reconcileRequestTasks(requestId, selectedSlugs) {
     OnboardingRequestTask.find({ requestId }).lean(),
   ]);
 
-  const preserve = new Map();
-  for (const t of existing) {
-    preserve.set(`${t.serviceSlug}::${t.title}`, t);
+  // Upsert each template task — preserves existing _id so frontend refs stay valid.
+  // Remove tasks that are no longer in the template set.
+  const templateKeys = new Set(templates.map((t) => `${t.serviceSlug}::${t.title}`));
+  const staleIds = existing
+    .filter((t) => !templateKeys.has(`${t.serviceSlug}::${t.title}`))
+    .map((t) => t._id);
+  if (staleIds.length > 0) {
+    await OnboardingRequestTask.deleteMany({ _id: { $in: staleIds } });
   }
 
-  await OnboardingRequestTask.deleteMany({ requestId });
+  const existingMap = new Map();
+  for (const t of existing) {
+    existingMap.set(`${t.serviceSlug}::${t.title}`, t);
+  }
 
-  const docs = templates.map((tpl) => {
+  const ops = templates.map((tpl) => {
     const meta = metaMap.get(tpl.serviceSlug);
-    const prev = preserve.get(`${tpl.serviceSlug}::${tpl.title}`);
+    const prev = existingMap.get(`${tpl.serviceSlug}::${tpl.title}`);
     return {
-      requestId,
-      serviceSlug: tpl.serviceSlug,
-      serviceTitle: meta?.title ?? tpl.serviceSlug,
-      taskTemplateId: tpl._id,
-      title: tpl.title,
-      sortOrder: tpl.sortOrder,
-      completed: Boolean(prev?.completed),
-      completedAt: prev?.completedAt ?? null,
-      completedBy: prev?.completedBy ?? null,
-      completedByName: prev?.completedByName ?? '',
-      publicComment: prev?.publicComment ?? '',
-      internalNote: prev?.internalNote ?? '',
-      issueDescription: prev?.issueDescription ?? '',
-      resolution: prev?.resolution ?? '',
-      attachmentUrl: prev?.attachmentUrl ?? '',
+      updateOne: {
+        filter: { requestId, serviceSlug: tpl.serviceSlug, title: tpl.title },
+        update: {
+          $set: {
+            serviceTitle: meta?.title ?? tpl.serviceSlug,
+            taskTemplateId: tpl._id,
+            sortOrder: tpl.sortOrder,
+          },
+          $setOnInsert: {
+            requestId,
+            serviceSlug: tpl.serviceSlug,
+            title: tpl.title,
+            completed: Boolean(prev?.completed),
+            completedAt: prev?.completedAt ?? null,
+            completedBy: prev?.completedBy ?? null,
+            completedByName: prev?.completedByName ?? '',
+            publicComment: prev?.publicComment ?? '',
+            internalNote: prev?.internalNote ?? '',
+            issueDescription: prev?.issueDescription ?? '',
+            resolution: prev?.resolution ?? '',
+            attachmentUrl: prev?.attachmentUrl ?? '',
+          },
+        },
+        upsert: true,
+      },
     };
   });
 
-  if (docs.length > 0) {
-    await OnboardingRequestTask.insertMany(docs);
+  if (ops.length > 0) {
+    await OnboardingRequestTask.bulkWrite(ops);
   }
-  return docs.length;
+  return ops.length;
 }
 
 export async function syncServiceTemplates() {
