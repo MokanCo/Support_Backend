@@ -171,6 +171,39 @@ export async function sendOnboardingCompletedEmail(payload) {
   return sendMail({ to: payload.to, subject, text, html });
 }
 
+export async function sendOnboardingEmailConflictEmail(payload) {
+  const subject = 'Action required: Email already registered';
+  const text = [
+    `Hello ${payload.ownerName},`,
+    '',
+    `Thank you for submitting an onboarding request for ${payload.locationName}.`,
+    '',
+    `Unfortunately, the email address you provided (${payload.email}) is already registered and linked to an existing location: ${payload.existingLocationName}.`,
+    '',
+    'Each email address can only be associated with one location.',
+    '',
+    'To proceed with your onboarding, please re-submit your request using a different email address.',
+    '',
+    'We apologise for any inconvenience and thank you for your cooperation.',
+    '',
+    'Thank you.',
+  ].join('\n');
+
+  const html = `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;padding:24px;max-width:560px;">
+    <p>Hello <strong>${escapeHtml(payload.ownerName)}</strong>,</p>
+    <p>Thank you for submitting an onboarding request for <strong>${escapeHtml(payload.locationName)}</strong>.</p>
+    <p>Unfortunately, the email address you provided (<strong>${escapeHtml(payload.email)}</strong>) is already registered and linked to an existing location: <strong>${escapeHtml(payload.existingLocationName)}</strong>.</p>
+    <p>Each email address can only be associated with one location.</p>
+    <p style="background:#fef3c7;border-left:4px solid #d97706;padding:12px 16px;border-radius:4px;">
+      To proceed, please re-submit your onboarding request using a <strong>different email address</strong>.
+    </p>
+    <p>We apologise for any inconvenience and thank you for your cooperation.</p>
+    <p>Thank you.</p>
+  </body></html>`;
+
+  return sendMail({ to: payload.to, subject, text, html });
+}
+
 export { adminDashboardUrl };
 
 export async function sendOnboardingChatNotificationEmail(payload) {

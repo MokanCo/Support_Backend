@@ -112,6 +112,12 @@ export const provisionRequest = asyncHandler(async (req, res) => {
   res.status(200).json(result);
 });
 
+export const notifyEmailConflict = asyncHandler(async (req, res) => {
+  const { notifyEmailConflict: notify } = await import('../services/onboardingManagementService.js');
+  const result = await notify(req.params.id);
+  res.status(200).json(result);
+});
+
 export const syncTemplates = asyncHandler(async (_req, res) => {
   const { syncServiceTemplates } = await import('../services/onboardingTemplateService.js');
   const result = await syncServiceTemplates();

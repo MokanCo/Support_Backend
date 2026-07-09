@@ -4,6 +4,8 @@ import OnboardingRequest, { ONBOARDING_STATUSES } from '../models/OnboardingRequ
 import OnboardingRequestTask from '../models/OnboardingRequestTask.js';
 import OnboardingActivityLog from '../models/OnboardingActivityLog.js';
 import OnboardingIdCounter from '../models/OnboardingIdCounter.js';
+import User from '../models/User.js';
+import Location from '../models/Location.js';
 import { AppError } from '../utils/AppError.js';
 import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
 import * as locationService from './locationService.js';
@@ -21,6 +23,7 @@ import {
   sendOnboardingCompletedEmail,
   sendOnboardingMilestoneEmail,
   sendOnboardingPublicCommentEmail,
+  sendOnboardingEmailConflictEmail,
 } from './onboardingMailService.js';
 
 function escapeRegex(s) {
@@ -258,6 +261,21 @@ export async function getAdminRequestDetail(id) {
     ? tasks
     : services.flatMap((s) => s.tasks);
 
+  // Check if the partner email is already registered to a different location
+  let emailConflict = null;
+  if (reqDoc.personal?.email && !reqDoc.locationId) {
+    const existingUser = await User.findOne({
+      email: reqDoc.personal.email.toLowerCase().trim(),
+      role: 'partner',
+    }).lean();
+    if (existingUser?.locationId) {
+      const existingLocation = await Location.findById(existingUser.locationId).lean();
+      emailConflict = {
+        locationName: existingLocation?.name ?? 'another location',
+      };
+    }
+  }
+
   return {
     request: formatRequestRow(reqDoc),
     trackingUrl: reqDoc.trackingId ? buildTrackingUrl(reqDoc.trackingToken) : null,
@@ -269,7 +287,36 @@ export async function getAdminRequestDetail(id) {
       totalTasks: progressTasks.length,
       completedTasks: progressTasks.filter((t) => t.completed).length,
     },
+    emailConflict,
   };
+}
+
+export async function notifyEmailConflict(id) {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new AppError('Invalid onboarding request id', 400);
+  }
+  const request = await OnboardingRequest.findById(id).lean();
+  if (!request) throw new AppError('Onboarding request not found', 404);
+
+  const email = request.personal?.email?.toLowerCase().trim();
+  if (!email) throw new AppError('No email on this request', 400);
+
+  const existingUser = await User.findOne({ email, role: 'partner' }).lean();
+  if (!existingUser?.locationId) {
+    throw new AppError('No email conflict found for this request', 409);
+  }
+
+  const existingLocation = await Location.findById(existingUser.locationId).lean();
+
+  await sendOnboardingEmailConflictEmail({
+    to: email,
+    ownerName: ownerName(request),
+    locationName: request.location?.locationName ?? '',
+    email,
+    existingLocationName: existingLocation?.name ?? 'another location',
+  });
+
+  return { sent: true };
 }
 
 export async function approveRequest(id, reviewer) {

@@ -1,4 +1,5 @@
 import OnboardingRequest from '../models/OnboardingRequest.js';
+import User from '../models/User.js';
 import { recalculateProgress, logActivity } from './onboardingManagementService.js';
 import * as locationService from './locationService.js';
 import * as userService from './userService.js';
@@ -47,14 +48,21 @@ export async function runOpeningDateJobs() {
         }
 
         if (!userId) {
-          const user = await userService.createUser({
-            name: ownerName(req),
-            email: req.personal.email,
-            role: 'partner',
-            locationId,
-            sendInvite: true,
-          });
-          userId = user.id;
+          const email = req.personal.email.toLowerCase().trim();
+          const existing = await User.findOne({ email }).lean();
+          if (existing) {
+            // Email already has an account — reuse the existing user
+            userId = String(existing._id);
+          } else {
+            const user = await userService.createUser({
+              name: ownerName(req),
+              email,
+              role: 'partner',
+              locationId,
+              sendInvite: true,
+            });
+            userId = user.id;
+          }
           req.userId = userId;
         }
 

@@ -555,6 +555,14 @@ router.patch(
   onboardingController.updateTask,
 );
 
+router.post(
+  '/admin/requests/:id/notify-email-conflict',
+  roleMiddleware(['admin']),
+  onboardingRequestIdValidators,
+  validateRequest,
+  onboardingController.notifyEmailConflict,
+);
+
 router.post('/admin/templates/sync', roleMiddleware(['admin']), onboardingController.syncTemplates);
 
 export default router;
