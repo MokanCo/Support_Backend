@@ -275,6 +275,9 @@ export async function createOrUpdateDraftRequest(input) {
 
   const personal = normalizePersonal(input.personal);
   const location = normalizeLocation(input.location);
+  const additionalPartners = Array.isArray(input.additionalPartners)
+    ? input.additionalPartners.map(normalizePersonal)
+    : [];
 
   if (input.trackingToken) {
     const existing = await OnboardingRequest.findOne({
@@ -283,6 +286,7 @@ export async function createOrUpdateDraftRequest(input) {
     });
     if (existing) {
       existing.personal = personal;
+      existing.additionalPartners = additionalPartners;
       existing.location = location;
       await existing.save();
       return {
@@ -297,6 +301,7 @@ export async function createOrUpdateDraftRequest(input) {
     trackingToken,
     status: 'draft',
     personal,
+    additionalPartners,
     location,
     selectedServices: [],
   });

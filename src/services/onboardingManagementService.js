@@ -54,6 +54,7 @@ function formatRequestRow(doc) {
     website: doc.website ?? '',
     notes: doc.notes ?? '',
     personal: doc.personal,
+    additionalPartners: doc.additionalPartners ?? [],
     location: doc.location,
     selectedServices: doc.selectedServices ?? [],
     submittedAt: doc.submittedAt ?? doc.createdAt,
@@ -140,10 +141,7 @@ export async function recalculateProgress(requestId) {
     const trackingUrl = buildTrackingUrl(request.trackingToken);
     await OnboardingRequest.updateOne(
       { _id: requestId },
-      {
-        $set: { progressPercent: 100, status: 'completed', completedAt: new Date() },
-        $unset: { trackingToken: '' },
-      },
+      { $set: { progressPercent: 100, status: 'completed', completedAt: new Date() } },
     );
     await logActivity(requestId, {
       eventType: 'completed',
@@ -594,15 +592,6 @@ export async function getPublicTracking(token) {
     activities: activities.map(formatActivity),
     progress: { percent: progressPercent, totalTasks, completedTasks },
   };
-
-  // Expire tracking link when all tasks are completed
-  const allTasksDone = totalTasks > 0 && completedTasks === totalTasks;
-  if (allTasksDone) {
-    await OnboardingRequest.updateOne(
-      { _id: request._id },
-      { $unset: { trackingToken: '' } },
-    ).catch(() => {});
-  }
 
   return responseData;
 }

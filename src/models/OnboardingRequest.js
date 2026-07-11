@@ -55,6 +55,7 @@ const onboardingRequestSchema = new mongoose.Schema(
       index: true,
     },
     personal: { type: personalSchema, required: true },
+    additionalPartners: { type: [personalSchema], default: [] },
     location: { type: locationSchema, required: true },
     businessName: { type: String, default: '', trim: true },
     website: { type: String, default: '', trim: true },
