@@ -66,6 +66,24 @@ export async function runOpeningDateJobs() {
           req.userId = userId;
         }
 
+        // Create users for additional partners
+        if (Array.isArray(req.additionalPartners)) {
+          for (const ap of req.additionalPartners) {
+            const apEmail = ap?.email?.toLowerCase().trim();
+            if (!apEmail) continue;
+            const apExisting = await User.findOne({ email: apEmail }).lean();
+            if (!apExisting) {
+              await userService.createUser({
+                name: `${ap.firstName ?? ''} ${ap.lastName ?? ''}`.trim(),
+                email: apEmail,
+                role: 'partner',
+                locationId,
+                sendInvite: true,
+              });
+            }
+          }
+        }
+
         await req.save();
 
         await logActivity(req._id, {

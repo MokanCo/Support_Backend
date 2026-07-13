@@ -289,6 +289,14 @@ export async function getAdminRequestDetail(id) {
   };
 }
 
+export async function checkEmailAvailability(email) {
+  if (!email || typeof email !== 'string') return { available: true };
+  const normalized = email.toLowerCase().trim();
+  if (!normalized) return { available: true };
+  const existing = await User.findOne({ email: normalized, role: 'partner' }).lean();
+  return { available: !(existing?.locationId) };
+}
+
 export async function notifyEmailConflict(id) {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new AppError('Invalid onboarding request id', 400);

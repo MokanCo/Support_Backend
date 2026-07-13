@@ -118,6 +118,12 @@ export const notifyEmailConflict = asyncHandler(async (req, res) => {
   res.status(200).json(result);
 });
 
+export const checkEmail = asyncHandler(async (req, res) => {
+  const { checkEmailAvailability } = await import('../services/onboardingManagementService.js');
+  const result = await checkEmailAvailability(req.query.email);
+  res.status(200).json(result);
+});
+
 export const syncTemplates = asyncHandler(async (_req, res) => {
   const { syncServiceTemplates } = await import('../services/onboardingTemplateService.js');
   const result = await syncServiceTemplates();

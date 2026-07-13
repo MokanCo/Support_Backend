@@ -262,6 +262,8 @@ router.get(
   onboardingController.trackRequest,
 );
 
+router.get('/check-email', onboardingController.checkEmail);
+
 // All admin routes require authentication; support can read + update tasks
 router.use(authMiddleware);
 router.use(roleMiddleware(['admin', 'support']));
