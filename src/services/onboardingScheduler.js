@@ -44,6 +44,7 @@ export async function runOpeningDateJobs() {
           });
           locationId = loc.id;
           req.locationId = locationId;
+          await req.save(); // persist locationId immediately so re-runs don't create a second location
         }
 
         if (!userId) {
@@ -56,9 +57,8 @@ export async function runOpeningDateJobs() {
             sendInvite: true,
           });
           req.userId = user.id;
+          await req.save();
         }
-
-        await req.save();
 
         await logActivity(req._id, {
           eventType: 'provisioned',
