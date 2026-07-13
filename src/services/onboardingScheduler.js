@@ -1,5 +1,4 @@
 import OnboardingRequest from '../models/OnboardingRequest.js';
-import User from '../models/User.js';
 import { recalculateProgress, logActivity } from './onboardingManagementService.js';
 import * as locationService from './locationService.js';
 import * as userService from './userService.js';
@@ -28,7 +27,7 @@ export async function runOpeningDateJobs() {
     try {
       await recalculateProgress(req._id);
 
-      // Auto-create location and user if not already provisioned
+      // Auto-create location and primary user if not already provisioned
       if (!req.locationId || !req.userId) {
         let locationId = req.locationId ? String(req.locationId) : null;
         let userId = req.userId ? String(req.userId) : null;
@@ -49,39 +48,14 @@ export async function runOpeningDateJobs() {
 
         if (!userId) {
           const email = req.personal.email.toLowerCase().trim();
-          const existing = await User.findOne({ email }).lean();
-          if (existing) {
-            // Email already has an account — reuse the existing user
-            userId = String(existing._id);
-          } else {
-            const user = await userService.createUser({
-              name: ownerName(req),
-              email,
-              role: 'partner',
-              locationId,
-              sendInvite: true,
-            });
-            userId = user.id;
-          }
-          req.userId = userId;
-        }
-
-        // Create users for additional partners
-        if (Array.isArray(req.additionalPartners)) {
-          for (const ap of req.additionalPartners) {
-            const apEmail = ap?.email?.toLowerCase().trim();
-            if (!apEmail) continue;
-            const apExisting = await User.findOne({ email: apEmail }).lean();
-            if (!apExisting) {
-              await userService.createUser({
-                name: `${ap.firstName ?? ''} ${ap.lastName ?? ''}`.trim(),
-                email: apEmail,
-                role: 'partner',
-                locationId,
-                sendInvite: true,
-              });
-            }
-          }
+          const user = await userService.createUser({
+            name: ownerName(req),
+            email,
+            role: 'partner',
+            locationId,
+            sendInvite: true,
+          });
+          req.userId = user.id;
         }
 
         await req.save();
@@ -92,6 +66,23 @@ export async function runOpeningDateJobs() {
           description: 'Portal access auto-provisioned on opening date.',
           isPublic: true,
         });
+      }
+
+      // Always provision additional partners as long as locationId is known
+      // (runs independently so it works even if primary user was created in a prior run)
+      const locationId = req.locationId ? String(req.locationId) : null;
+      if (locationId && Array.isArray(req.additionalPartners) && req.additionalPartners.length > 0) {
+        for (const ap of req.additionalPartners) {
+          const apEmail = ap?.email?.toLowerCase().trim();
+          if (!apEmail) continue;
+          await userService.createUser({
+            name: `${ap.firstName ?? ''} ${ap.lastName ?? ''}`.trim(),
+            email: apEmail,
+            role: 'partner',
+            locationId,
+            sendInvite: true,
+          });
+        }
       }
 
       processed++;
