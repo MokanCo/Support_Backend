@@ -75,13 +75,21 @@ export async function runOpeningDateJobs() {
         for (const ap of req.additionalPartners) {
           const apEmail = ap?.email?.toLowerCase().trim();
           if (!apEmail) continue;
-          await userService.createUser({
-            name: `${ap.firstName ?? ''} ${ap.lastName ?? ''}`.trim(),
-            email: apEmail,
-            role: 'partner',
-            locationId,
-            sendInvite: true,
-          });
+          try {
+            await userService.createUser({
+              name: `${ap.firstName ?? ''} ${ap.lastName ?? ''}`.trim(),
+              email: apEmail,
+              role: 'partner',
+              locationId,
+              sendInvite: true,
+            });
+          } catch (apErr) {
+            // 409 = already created on a prior scheduler run — safe to skip
+            if (apErr?.statusCode !== 409) {
+              // eslint-disable-next-line no-console
+              console.error(`[scheduler] additional partner ${apEmail} failed:`, apErr?.message ?? apErr);
+            }
+          }
         }
       }
 

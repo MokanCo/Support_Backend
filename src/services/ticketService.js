@@ -48,20 +48,23 @@ async function resolveSupportAssigneeId(assigneeId, locationId) {
   if (assignee.isDisabled) {
     throw new AppError('Cannot assign to a disabled user', 400);
   }
-  if (assignee.role !== 'support') {
-    throw new AppError('Only support users can be assigned to tickets', 400);
+  if (assignee.role !== 'support' && assignee.role !== 'admin') {
+    throw new AppError('Only support or admin users can be assigned to tickets', 400);
   }
 
-  const primary = await Location.findOne({
-    isPrimary: true,
-    isDisabled: { $ne: true },
-  }).select('_id');
-  let allowedLocId = primary?._id ?? null;
-  if (!allowedLocId && mongoose.Types.ObjectId.isValid(locationId)) {
-    allowedLocId = new mongoose.Types.ObjectId(locationId);
-  }
-  if (!allowedLocId || !assignee.locationId || !assignee.locationId.equals(allowedLocId)) {
-    throw new AppError('Assignee must be a support user at the primary location', 400);
+  // Admins are not scoped to a location — skip the location check for them
+  if (assignee.role === 'support') {
+    const primary = await Location.findOne({
+      isPrimary: true,
+      isDisabled: { $ne: true },
+    }).select('_id');
+    let allowedLocId = primary?._id ?? null;
+    if (!allowedLocId && mongoose.Types.ObjectId.isValid(locationId)) {
+      allowedLocId = new mongoose.Types.ObjectId(locationId);
+    }
+    if (!allowedLocId || !assignee.locationId || !assignee.locationId.equals(allowedLocId)) {
+      throw new AppError('Assignee must be a support user at the primary location', 400);
+    }
   }
   return assignee._id;
 }

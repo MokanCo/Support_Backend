@@ -74,7 +74,8 @@ export async function listUsersByLocationId(locationId) {
 }
 
 /**
- * Support users at the primary location (ticket assignee dropdown).
+ * Users eligible for ticket assignment: support users at the primary location,
+ * plus admin users at the primary location or with no location (global admins).
  * Falls back to the ticket's location if no primary is set yet.
  */
 export async function listUsersForTicketAssignment(locationId) {
@@ -94,9 +95,12 @@ export async function listUsersForTicketAssignment(locationId) {
   }
 
   const users = await User.find({
-    locationId: assignLocId,
     isDisabled: { $ne: true },
-    role: 'support',
+    $or: [
+      { role: 'support', locationId: assignLocId },
+      { role: 'admin', locationId: assignLocId },
+      { role: 'admin', locationId: null },
+    ],
   })
     .select('-password')
     .sort({ name: 1 })
