@@ -2,6 +2,7 @@ import 'dotenv/config';
 import http from 'http';
 import app from './app.js';
 import { connectDb } from './config/db.js';
+import { logMailProviderStatus } from './services/mailSender.js';
 import { attachSocketServer } from './realtime/socketServer.js';
 import { syncServiceTemplates } from './services/onboardingTemplateService.js';
 import { runOpeningDateJobs } from './services/onboardingScheduler.js';
@@ -18,6 +19,7 @@ async function bootstrap() {
     // eslint-disable-next-line no-console
     console.error('[onboarding] template sync failed', e);
   }
+  void logMailProviderStatus();
   const server = http.createServer(app);
   attachSocketServer(server);
 

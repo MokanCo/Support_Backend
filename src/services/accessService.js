@@ -47,12 +47,23 @@ export function ticketListFilterForUser(user) {
 }
 
 /**
- * Scope for GET /api/tickets list (support: assignments only; partner: own tickets at location).
+ * Scope for GET /api/tickets list.
  * @param {{ id: string; role: string; locationId: string | null }} user
+ * @param {{ newQueue?: string | boolean }} [query]
  */
-export function ticketListScopeForUser(user) {
-  if (user.role === 'admin') return {};
+export function ticketListScopeForUser(user, query = {}) {
+  const isNewQueue = query.newQueue === '1' || query.newQueue === true;
+
+  if (user.role === 'admin') {
+    if (isNewQueue) {
+      return { assignedTo: null };
+    }
+    return {};
+  }
   if (user.role === 'support') {
+    if (isNewQueue) {
+      return { status: 'in_queue', assignedTo: null };
+    }
     return { assignedTo: new mongoose.Types.ObjectId(user.id) };
   }
   return ticketListFilterForUser(user);

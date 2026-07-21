@@ -6,6 +6,13 @@ import User from '../models/User.js';
 import { assertCanAccessTicket } from '../services/accessService.js';
 import { getJwtSecret } from '../utils/jwt.js';
 import { setSocketIo } from './messageHub.js';
+import {
+  bindPresenceIo,
+  getOnlineUserIds,
+  markUserConnected,
+  markUserDisconnected,
+} from './presence.js';
+import { buildTicketChatHeaderState } from '../services/ticketChatHeaderService.js';
 
 function extractToken(socket) {
   const fromAuth = socket.handshake.auth?.token;
@@ -34,6 +41,7 @@ export function attachSocketServer(httpServer) {
   });
 
   setSocketIo(io);
+  bindPresenceIo(io);
 
   io.use((socket, next) => {
     try {
@@ -56,7 +64,12 @@ export function attachSocketServer(httpServer) {
   });
 
   io.on('connection', (socket) => {
-    void socket.join(`user:${socket.data.userId}`);
+    const userId = socket.data.userId;
+    markUserConnected(userId);
+    void socket.join(`user:${userId}`);
+    socket.emit('presence:sync', {
+      onlineUserIds: [...getOnlineUserIds()],
+    });
 
     const join = async (ticketId, cb) => {
       try {
@@ -80,8 +93,15 @@ export function attachSocketServer(httpServer) {
         };
         const ticket = await Ticket.findById(ticketId);
         assertCanAccessTicket(actor, ticket);
-        await socket.join(`ticket:${String(ticketId)}`);
-        cb?.({ ok: true });
+        const tid = String(ticketId);
+        await socket.join(`ticket:${tid}`);
+        let chatHeader;
+        try {
+          chatHeader = await buildTicketChatHeaderState(actor, tid);
+        } catch {
+          chatHeader = undefined;
+        }
+        cb?.({ ok: true, chatHeader });
       } catch (e) {
         cb?.({ ok: false, error: e?.message ?? 'Forbidden' });
       }
@@ -95,7 +115,9 @@ export function attachSocketServer(httpServer) {
       if (ticketId) void socket.leave(`ticket:${String(ticketId)}`);
     });
 
-    socket.on('disconnect', () => {});
+    socket.on('disconnect', () => {
+      markUserDisconnected(userId);
+    });
   });
 
   return io;

@@ -38,5 +38,7 @@ const userSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+userSchema.index({ locationId: 1, createdAt: -1 });
+
 export const USER_ROLES = ROLES;
 export default mongoose.model('User', userSchema);

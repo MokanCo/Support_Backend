@@ -3,11 +3,13 @@ import mongoose from 'mongoose';
 import User from '../models/User.js';
 import Location from '../models/Location.js';
 import Ticket from '../models/Ticket.js';
+import { BCRYPT_ROUNDS } from '../config/bcrypt.js';
 import { AppError } from '../utils/AppError.js';
-import { sendPortalInviteEmail } from './boardMailService.js';
+import { getOnlineUserIds, isUserOnline } from '../realtime/presence.js';
 
-const SALT_ROUNDS = 12;
 export const INVITE_TEMP_PASSWORD = 'password123';
+/** Display-only placeholder for password column in admin user tables. */
+export const MASKED_PASSWORD_DISPLAY = '********';
 
 /**
  * @param {{ name: string; email: string; password: string; role: string; locationId?: string | null }} input
@@ -35,7 +37,7 @@ export async function createUser(input) {
     throw new AppError('password must be at least 8 characters', 400);
   }
 
-  const password = await bcrypt.hash(plainPassword, SALT_ROUNDS);
+  const password = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS);
 
   const user = await User.create({
     name: input.name.trim(),
@@ -46,26 +48,16 @@ export async function createUser(input) {
     mustChangePassword: sendInvite,
   });
 
-  if (sendInvite) {
-    try {
-      await sendPortalInviteEmail({
-        to: email,
-        name: user.name,
-        email,
-        temporaryPassword: INVITE_TEMP_PASSWORD,
-      });
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('[userService] portal invite email failed', e);
-    }
-  }
-
   return sanitizeUser(user);
 }
 
 export async function listUsers() {
-  const users = await User.find().sort({ createdAt: -1 }).lean();
+  const users = await User.find().select('-password').sort({ createdAt: -1 }).lean();
   return users.map(sanitizeUserLean);
+}
+
+export function listOnlineUserIds() {
+  return [...getOnlineUserIds()];
 }
 
 /** Users assigned to the given location (`locationId` matches). */
@@ -82,20 +74,29 @@ export async function listUsersByLocationId(locationId) {
 }
 
 /**
- * Staff who can be assigned to tickets for this location: users at the site
- * plus support/admin with no location (global pool).
+ * Support users at the primary location (ticket assignee dropdown).
+ * Falls back to the ticket's location if no primary is set yet.
  */
 export async function listUsersForTicketAssignment(locationId) {
-  if (!mongoose.Types.ObjectId.isValid(locationId)) {
+  const primary = await Location.findOne({
+    isPrimary: true,
+    isDisabled: { $ne: true },
+  })
+    .select('_id')
+    .lean();
+
+  let assignLocId = primary?._id ?? null;
+  if (!assignLocId && mongoose.Types.ObjectId.isValid(locationId)) {
+    assignLocId = new mongoose.Types.ObjectId(locationId);
+  }
+  if (!assignLocId) {
     return [];
   }
-  const oid = new mongoose.Types.ObjectId(locationId);
+
   const users = await User.find({
+    locationId: assignLocId,
     isDisabled: { $ne: true },
-    $or: [
-      { locationId: oid, role: { $in: ['support', 'admin'] } },
-      { locationId: null, role: { $in: ['support', 'admin'] } },
-    ],
+    role: 'support',
   })
     .select('-password')
     .sort({ name: 1 })
@@ -125,7 +126,7 @@ export async function updateUserById(id, patch) {
   if (patch.name !== undefined) user.name = patch.name.trim();
 
   if (patch.password) {
-    user.password = await bcrypt.hash(patch.password, SALT_ROUNDS);
+    user.password = await bcrypt.hash(patch.password, BCRYPT_ROUNDS);
     user.mustChangePassword = false;
   }
 
@@ -161,28 +162,34 @@ export async function updateUserById(id, patch) {
 }
 
 function sanitizeUser(userDoc) {
+  const id = String(userDoc._id);
   return {
-    id: String(userDoc._id),
+    id,
     name: userDoc.name,
     email: userDoc.email,
+    password: MASKED_PASSWORD_DISPLAY,
     role: userDoc.role,
     locationId: userDoc.locationId ? String(userDoc.locationId) : null,
     isDisabled: Boolean(userDoc.isDisabled),
     mustChangePassword: Boolean(userDoc.mustChangePassword),
+    online: isUserOnline(id),
     createdAt: userDoc.createdAt,
     updatedAt: userDoc.updatedAt,
   };
 }
 
 function sanitizeUserLean(u) {
+  const id = String(u._id);
   return {
-    id: String(u._id),
+    id,
     name: u.name,
     email: u.email,
+    password: MASKED_PASSWORD_DISPLAY,
     role: u.role,
     locationId: u.locationId ? String(u.locationId) : null,
     isDisabled: Boolean(u.isDisabled),
     mustChangePassword: Boolean(u.mustChangePassword),
+    online: isUserOnline(id),
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
   };

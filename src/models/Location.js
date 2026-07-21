@@ -29,8 +29,15 @@ const locationSchema = new mongoose.Schema(
     state: { type: String, default: '', trim: true },
     zip: { type: String, default: '', trim: true },
     isDisabled: { type: Boolean, default: false, index: true },
+    /** HQ / primary site — only one; cannot be deleted. */
+    isPrimary: { type: Boolean, default: false, index: true },
   },
   { timestamps: true },
+);
+
+locationSchema.index(
+  { isPrimary: 1 },
+  { unique: true, partialFilterExpression: { isPrimary: true } },
 );
 
 export default mongoose.model('Location', locationSchema);

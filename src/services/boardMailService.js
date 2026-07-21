@@ -1,32 +1,31 @@
-import nodemailer from 'nodemailer';
+import {
+  dispatchEmail,
+  escapeHtml,
+  getDefaultFrom,
+  getSmtpTransport,
+  isMailConfigured,
+} from './mailSender.js';
+import {
+  renderBodyParagraph,
+  renderBrandedEmail,
+  renderCommentQuote,
+  renderDetailRow,
+  renderFooterNote,
+  renderGradientButton,
+  renderInlineCode,
+  renderLinkFallback,
+} from './emailTemplate.js';
 
-let cached;
+const MAIL_SEND_TIMEOUT_MS = 60_000;
+const INVITE_MAIL_TIMEOUT_MS = 60_000;
 
-function escapeHtml(s) {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+/** @deprecated use getSmtpTransport from mailSender */
+export function getTransport() {
+  return getSmtpTransport();
 }
 
-function getTransport() {
-  if (cached !== undefined) return cached;
-  const host = process.env.SMTP_HOST?.trim();
-  const port = Number(process.env.SMTP_PORT || '587');
-  const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASS?.trim();
-  if (!host || !user) {
-    cached = null;
-    return null;
-  }
-  cached = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass: pass || '' },
-  });
-  return cached;
+function mailConfigured() {
+  return isMailConfigured();
 }
 
 /**
@@ -42,8 +41,7 @@ function getTransport() {
  * }} payload
  */
 export async function sendTaskCompleteEmails(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const subject = `Completed: ${payload.taskTitle}`;
   const assigneeLabel = payload.assigneeName?.trim() || 'Unassigned';
   const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
@@ -68,49 +66,35 @@ export async function sendTaskCompleteEmails(payload) {
   const safeBoard = escapeHtml(payload.boardName);
   const safeTicket = payload.ticketCode ? escapeHtml(payload.ticketCode) : '';
   const href = taskUrl ? escapeHtml(taskUrl) : '';
-  const buttonBlock = taskUrl
-    ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
-  <tr>
-    <td align="left">
-      <a href="${href}" target="_blank" rel="noopener noreferrer"
-        style="display:inline-block;padding:12px 28px;background:#0d6efd;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.2;">
-        View task
-      </a>
-    </td>
-  </tr>
-</table>
-<p style="margin:0 0 16px;font-size:13px;color:#666;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
-  Or open this link: <a href="${href}" style="color:#0d6efd;">${href}</a>
-</p>`
-    : `<p style="margin:16px 0 0;font-size:14px;color:#666;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">No app link configured (set APP_URL or FRONTEND_URL).</p>`;
+  const bodyHtml = [
+    renderBodyParagraph(
+      `The task <strong>${safeTitle}</strong> assigned to <strong>${safeAssignee}</strong> has been completed.`,
+      { large: true },
+    ),
+    renderDetailRow('Board', safeBoard),
+    renderDetailRow('Task', safeTitle),
+    renderDetailRow('Assignee', safeAssignee),
+    safeTicket ? renderDetailRow('Ticket', safeTicket) : '',
+    href
+      ? renderGradientButton({ label: 'View task', href })
+        + renderLinkFallback(href)
+      : renderFooterNote('No app link configured (set APP_URL or FRONTEND_URL).'),
+  ].join('');
 
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
-<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
-  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
-    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">The task <strong>${safeTitle}</strong> assigned to <strong>${safeAssignee}</strong> has been completed.</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Board</strong><br>${safeBoard}</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Task</strong><br>${safeTitle}</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Assignee</strong><br>${safeAssignee}</p>
-    ${safeTicket ? `<p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Ticket</strong><br>${safeTicket}</p>` : ''}
-    ${buttonBlock}
-  </div>
-</body>
-</html>`;
+  const html = renderBrandedEmail({
+    preheader: `Task completed: ${payload.taskTitle}`,
+    bodyHtml,
+  });
 
-  if (!transport || !payload.to?.length) {
-    console.info('[boards] Task complete (no SMTP or recipients):', text.replace(/\n/g, ' | '));
+  if (!mailConfigured() || !payload.to?.length) {
+    console.info('[boards] Task complete (no mail provider or recipients):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({
-      from,
-      to: payload.to.join(', '),
-      subject,
-      text,
-      html,
-    });
+    await dispatchEmail(
+      { from, to: payload.to, subject, text, html },
+      MAIL_SEND_TIMEOUT_MS,
+    );
     return true;
   } catch (e) {
     console.error('[boards] send mail failed', e);
@@ -122,8 +106,7 @@ export async function sendTaskCompleteEmails(payload) {
  * @param {{ to: string[]; ticketRef: string; title: string; locationName?: string | null }} payload
  */
 export async function sendTicketCompletedEmails(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const ref = payload.ticketRef || '—';
   const subject = `Ticket ${ref} completed`;
   const lines = [
@@ -135,18 +118,30 @@ export async function sendTicketCompletedEmails(payload) {
   if (payload.locationName) lines.push(`Location: ${payload.locationName}`);
   const text = lines.join('\n');
 
-  if (!transport || !payload.to?.length) {
+  const safeRef = escapeHtml(ref);
+  const safeTitle = escapeHtml(payload.title || '—');
+  const safeLoc = payload.locationName ? escapeHtml(payload.locationName) : '';
+  const bodyHtml = [
+    renderBodyParagraph('This support ticket has been marked completed.', { large: true }),
+    renderDetailRow('Reference', safeRef),
+    renderDetailRow('Title', safeTitle),
+    safeLoc ? renderDetailRow('Location', safeLoc) : '',
+  ].join('');
+  const html = renderBrandedEmail({
+    preheader: `Ticket ${ref} completed`,
+    bodyHtml,
+  });
+
+  if (!mailConfigured() || !payload.to?.length) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Ticket complete (no SMTP or recipients):', text.replace(/\n/g, ' | '));
+    console.info('[mail] Ticket complete (no mail provider or recipients):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({
-      from,
-      to: payload.to.join(', '),
-      subject,
-      text,
-    });
+    await dispatchEmail(
+      { from, to: payload.to, subject, text, html },
+      MAIL_SEND_TIMEOUT_MS,
+    );
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -183,8 +178,7 @@ function ticketViewUrl(ticketObjectId) {
  * }} payload
  */
 export async function sendNewPartnerTicketAdminEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const ref = payload.ticketRef || '—';
   const subject = `New ticket ${ref} from partner`;
   const ticketUrl = ticketViewUrl(payload.ticketId);
@@ -206,41 +200,29 @@ export async function sendNewPartnerTicketAdminEmail(payload) {
   const safePartner = escapeHtml(partnerLabel);
   const safeLoc = payload.locationName ? escapeHtml(payload.locationName) : '';
   const href = ticketUrl ? escapeHtml(ticketUrl) : '';
-  const buttonBlock = href
-    ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
-  <tr>
-    <td align="left">
-      <a href="${href}" target="_blank" rel="noopener noreferrer"
-        style="display:inline-block;padding:12px 28px;background:#0d6efd;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.2;">
-        View ticket
-      </a>
-    </td>
-  </tr>
-</table>`
-    : '';
+  const bodyHtml = [
+    renderBodyParagraph(`<strong>${safePartner}</strong> opened a new support ticket.`, {
+      large: true,
+    }),
+    renderDetailRow('Reference', safeRef),
+    renderDetailRow('Title', safeTitle),
+    safeLoc ? renderDetailRow('Location', safeLoc) : '',
+    href ? renderGradientButton({ label: 'View ticket', href }) + renderLinkFallback(href) : '',
+  ].join('');
 
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
-<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
-  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
-    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;"><strong>${safePartner}</strong> opened a new support ticket.</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Reference</strong><br>${safeRef}</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Title</strong><br>${safeTitle}</p>
-    ${safeLoc ? `<p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Location</strong><br>${safeLoc}</p>` : ''}
-    ${buttonBlock}
-  </div>
-</body>
-</html>`;
+  const html = renderBrandedEmail({
+    preheader: `New ticket ${ref} from partner`,
+    bodyHtml,
+  });
 
   const recipients = [...new Set((payload.to ?? []).map((e) => String(e).trim()).filter(Boolean))];
-  if (!transport || recipients.length === 0) {
+  if (!mailConfigured() || recipients.length === 0) {
     // eslint-disable-next-line no-console
-    console.info('[mail] New partner ticket (no SMTP or recipients):', text.replace(/\n/g, ' | '));
+    console.info('[mail] New partner ticket (no mail provider or recipients):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({ from, to: recipients.join(', '), subject, text, html });
+    await dispatchEmail({ from, to: recipients, subject, text, html }, MAIL_SEND_TIMEOUT_MS);
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -250,8 +232,7 @@ export async function sendNewPartnerTicketAdminEmail(payload) {
 }
 
 export async function sendTicketAssignedEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const ref = payload.ticketRef || '—';
   const subject = `Ticket ${ref} assigned to you`;
   const ticketUrl = ticketViewUrl(payload.ticketId);
@@ -273,43 +254,31 @@ export async function sendTicketAssignedEmail(payload) {
   const safeTitle = escapeHtml(payload.title || '—');
   const safeLoc = payload.locationName ? escapeHtml(payload.locationName) : '';
   const href = ticketUrl ? escapeHtml(ticketUrl) : '';
-  const buttonBlock = href
-    ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
-  <tr>
-    <td align="left">
-      <a href="${href}" target="_blank" rel="noopener noreferrer"
-        style="display:inline-block;padding:12px 28px;background:#0d6efd;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.2;">
-        View ticket
-      </a>
-    </td>
-  </tr>
-</table>
-<p style="margin:0 0 16px;font-size:13px;color:#666;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
-  Or open this link: <a href="${href}" style="color:#0d6efd;">${href}</a>
-</p>`
-    : '';
+  const bodyHtml = [
+    renderBodyParagraph(
+      `Hi <strong>${safeName}</strong>, a support ticket has been assigned to you.`,
+      { large: true },
+    ),
+    renderDetailRow('Reference', safeRef),
+    renderDetailRow('Title', safeTitle),
+    safeLoc ? renderDetailRow('Location', safeLoc) : '',
+    href
+      ? renderGradientButton({ label: 'View ticket', href }) + renderLinkFallback(href)
+      : '',
+  ].join('');
 
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
-<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
-  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
-    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hi <strong>${safeName}</strong>, a support ticket has been assigned to you.</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Reference</strong><br>${safeRef}</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Title</strong><br>${safeTitle}</p>
-    ${safeLoc ? `<p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Location</strong><br>${safeLoc}</p>` : ''}
-    ${buttonBlock}
-  </div>
-</body>
-</html>`;
+  const html = renderBrandedEmail({
+    preheader: `Ticket ${ref} assigned to you`,
+    bodyHtml,
+  });
 
-  if (!transport || !payload.to) {
+  if (!mailConfigured() || !payload.to) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Ticket assigned (no SMTP or recipient):', text.replace(/\n/g, ' | '));
+    console.info('[mail] Ticket assigned (no mail provider or recipient):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({ from, to: payload.to, subject, text, html });
+    await dispatchEmail({ from, to: payload.to, subject, text, html }, MAIL_SEND_TIMEOUT_MS);
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -328,8 +297,7 @@ export async function sendTicketAssignedEmail(payload) {
  * }} payload
  */
 export async function sendPortalInviteEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
   const loginUrl = base ? `${base}/login` : '/login';
   const subject = 'You have been invited to the Moka&Co portal';
@@ -354,46 +322,39 @@ export async function sendPortalInviteEmail(payload) {
     'If you have any trouble signing in, please contact your administrator.',
   ].join('\n');
 
-  const buttonBlock = `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
-  <tr>
-    <td align="left">
-      <a href="${href}" target="_blank" rel="noopener noreferrer"
-        style="display:inline-block;padding:12px 28px;background:#0d6efd;color:#ffffff !important;text-decoration:none;border-radius:6px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.2;">
-        Sign in to portal
-      </a>
-    </td>
-  </tr>
-</table>
-<p style="margin:0 0 16px;font-size:13px;color:#666;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
-  Or open this link: <a href="${href}" style="color:#0d6efd;">${href}</a>
-</p>`;
+  const bodyHtml = [
+    renderBodyParagraph(`Hi <strong>${safeName}</strong>,`, { large: true }),
+    renderBodyParagraph(
+      'You have been invited to use the <strong>Moka&amp;Co</strong> portal. Below are your credentials. Please sign in and choose a new password when prompted.',
+    ),
+    renderDetailRow('Email', safeEmail),
+    renderDetailRow('Temporary password', renderInlineCode(safePassword)),
+    renderGradientButton({ label: 'Sign in to portal', href }),
+    renderLinkFallback(href),
+    renderFooterNote('If you have any trouble signing in, please contact your administrator.'),
+  ].join('');
 
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
-<body style="margin:0;padding:24px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
-  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:28px 32px;border-radius:8px;border:1px solid #e5e5e5;">
-    <p style="margin:0 0 16px;font-size:16px;line-height:1.5;">Hi <strong>${safeName}</strong>,</p>
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.55;">You have been invited to use the <strong>Moka&amp;Co</strong> portal. Below are your credentials. Please sign in and choose a new password when prompted.</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Email</strong><br>${safeEmail}</p>
-    <p style="margin:0 0 16px;font-size:14px;color:#555;"><strong>Temporary password</strong><br><code style="background:#f4f4f5;padding:2px 6px;border-radius:4px;">${safePassword}</code></p>
-    ${buttonBlock}
-    <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#666;">If you see any issue with login, please contact your administrator.</p>
-  </div>
-</body>
-</html>`;
+  const html = renderBrandedEmail({
+    preheader: 'Your Moka&Co portal invite',
+    bodyHtml,
+  });
 
-  if (!transport || !payload.to) {
+  if (!mailConfigured() || !payload.to) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Portal invite (no SMTP or recipient):', text.replace(/\n/g, ' | '));
+    console.info('[mail] Portal invite (no mail provider or recipient):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({ from, to: payload.to, subject, text, html });
+    await dispatchEmail(
+      { from, to: payload.to, subject, text, html },
+      INVITE_MAIL_TIMEOUT_MS,
+    );
+    // eslint-disable-next-line no-console
+    console.info('[mail] Portal invite sent to', payload.to);
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
-    console.error('[mail] portal invite send failed', e);
+    console.error('[mail] portal invite send failed', e?.message || e);
     return false;
   }
 }
@@ -409,8 +370,7 @@ export async function sendPortalInviteEmail(payload) {
  * }} payload
  */
 export async function sendContactFormEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const to =
     payload.adminEmail?.trim()
     || process.env.ADMIN_EMAIL?.trim()
@@ -435,34 +395,36 @@ export async function sendContactFormEmail(payload) {
     payload.message,
   ].join('\n');
 
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
-<body style="margin:0;padding:16px;background:#f4f4f5;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;">
-  <div style="max-width:560px;margin:0 auto;background:#ffffff;padding:20px 24px;border-radius:8px;border:1px solid #e5e5e5;">
-    <p style="margin:0 0 12px;font-size:18px;font-weight:600;">New contact form submission</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Name</strong><br>${safeName}</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Email</strong><br>${safeEmail}</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;"><strong>Subject</strong><br>${safeSubject}</p>
-    <p style="margin:0;font-size:14px;color:#555;white-space:pre-wrap;"><strong>Message</strong><br>${safeMessage}</p>
-  </div>
-</body>
-</html>`;
+  const bodyHtml = [
+    renderBodyParagraph('<strong>New contact form submission</strong>', { large: true }),
+    renderDetailRow('Name', safeName),
+    renderDetailRow('Email', safeEmail),
+    renderDetailRow('Subject', safeSubject),
+    `<p style="margin:0;font-size:14px;line-height:1.55;color:#1a1a1a;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;white-space:pre-wrap;"><strong style="color:#1a1a1a;">Message</strong><br>${safeMessage}</p>`,
+  ].join('');
 
-  if (!transport) {
-    console.info('[mail] Contact form (no SMTP):', text.replace(/\n/g, ' | '));
+  const html = renderBrandedEmail({
+    preheader: subject,
+    bodyHtml,
+  });
+
+  if (!mailConfigured()) {
+    console.info('[mail] Contact form (no mail provider):', text.replace(/\n/g, ' | '));
     return false;
   }
 
   try {
-    await transport.sendMail({
-      from,
-      to,
-      subject: `[Contact] ${subject}`,
-      text,
-      html,
-      replyTo: payload.email,
-    });
+    await dispatchEmail(
+      {
+        from,
+        to,
+        subject: `[Contact] ${subject}`,
+        text,
+        html,
+        replyTo: payload.email,
+      },
+      MAIL_SEND_TIMEOUT_MS,
+    );
     return true;
   } catch (e) {
     console.error('[mail] contact form send failed', e);
@@ -595,8 +557,7 @@ export async function sendOnboardingAdminNotificationEmail(payload) {
  * }} payload
  */
 export async function sendBoardMentionEmail(payload) {
-  const from = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || 'noreply@localhost';
-  const transport = getTransport();
+  const from = getDefaultFrom();
   const subject = `${payload.authorName} mentioned you on: ${payload.taskTitle || 'Board task'}`;
   const text = [
     `Hi ${payload.mentionedName},`,
@@ -610,35 +571,35 @@ export async function sendBoardMentionEmail(payload) {
     payload.taskUrl,
   ].join('\n');
 
-  const safeTask = escapeHtml(payload.taskTitle);
+  const safeAuthor = escapeHtml(payload.authorName);
+  const safeTask = escapeHtml(payload.taskTitle || 'Board task');
   const safeComment = escapeHtml(payload.commentText);
   const safeUrl = escapeHtml(payload.taskUrl);
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="margin:0;padding:20px;background:#f4f4f5;font-family:system-ui,sans-serif;">
-  <div style="max-width:560px;margin:0 auto;background:#fff;padding:24px;border-radius:8px;border:1px solid #e5e5e5;">
-    <p style="margin:0 0 12px;font-size:16px;"><strong>${escapeHtml(payload.authorName)}</strong> mentioned you on <strong>${safeTask}</strong>.</p>
-    <p style="margin:0 0 8px;font-size:14px;color:#555;">Comment</p>
-    <p style="margin:0 0 16px;font-size:14px;white-space:pre-wrap;border-left:3px solid #0d6efd;padding-left:12px;">${safeComment}</p>
-    <a href="${safeUrl}" style="display:inline-block;padding:10px 20px;background:#0d6efd;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">View task</a>
-  </div>
-</body>
-</html>`;
+  const bodyHtml = [
+    renderBodyParagraph(
+      `<strong>${safeAuthor}</strong> mentioned you on <strong>${safeTask}</strong>.`,
+      { large: true },
+    ),
+    renderCommentQuote(safeComment),
+    renderGradientButton({ label: 'View task', href: safeUrl }),
+    renderLinkFallback(safeUrl),
+  ].join('');
 
-  if (!transport || !payload.to?.trim()) {
+  const html = renderBrandedEmail({
+    preheader: `${payload.authorName} mentioned you`,
+    bodyHtml,
+  });
+
+  if (!mailConfigured() || !payload.to?.trim()) {
     // eslint-disable-next-line no-console
-    console.info('[mail] Mention (no SMTP or to):', text.replace(/\n/g, ' | '));
+    console.info('[mail] Mention (no mail provider or to):', text.replace(/\n/g, ' | '));
     return false;
   }
   try {
-    await transport.sendMail({
-      from,
-      to: payload.to.trim(),
-      subject,
-      text,
-      html,
-    });
+    await dispatchEmail(
+      { from, to: payload.to.trim(), subject, text, html },
+      MAIL_SEND_TIMEOUT_MS,
+    );
     return true;
   } catch (e) {
     // eslint-disable-next-line no-console
