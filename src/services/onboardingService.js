@@ -3,6 +3,7 @@ import OnboardingConfig from '../models/OnboardingConfig.js';
 import OnboardingServiceOption from '../models/OnboardingServiceOption.js';
 import OnboardingRequest, { ONBOARDING_STATUSES } from '../models/OnboardingRequest.js';
 import { AppError } from '../utils/AppError.js';
+import { DEFAULT_ONBOARDING_CONFIG } from '../constants/onboardingDefaults.js';
 import {
   sendOnboardingAdminNewRequestEmail,
 } from './onboardingMailService.js';
@@ -126,11 +127,20 @@ function buildTrackingUrl(token) {
 }
 
 async function getActiveConfig() {
-  const config = await OnboardingConfig.findOne({ key: 'default' });
+  let config = await OnboardingConfig.findOne({ key: 'default' });
   if (!config) {
-    throw new AppError('Onboarding is not configured yet', 503);
+    try {
+      config = await OnboardingConfig.create(DEFAULT_ONBOARDING_CONFIG);
+    } catch (err) {
+      // E11000: two requests raced on an empty DB — fetch the winner's doc
+      if (err?.code === 11000) {
+        config = await OnboardingConfig.findOne({ key: 'default' });
+      } else {
+        throw err;
+      }
+    }
   }
-  if (!config.enabled) {
+  if (!config || !config.enabled) {
     throw new AppError('Onboarding is currently unavailable', 503);
   }
   return config;
