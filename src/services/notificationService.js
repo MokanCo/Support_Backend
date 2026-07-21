@@ -184,6 +184,58 @@ export async function createTicketCreatedAdminNotifications(ticketObjectId) {
 }
 
 /**
+ * Notify every admin when a new onboarding request is submitted (in-app + socket).
+ * @param {{ requestId: string; locationName: string; ownerName: string }} meta
+ */
+export async function createOnboardingNewRequestNotification({ requestId, locationName, ownerName: owner }) {
+  const admins = await User.find({ role: { $in: ['admin', 'support'] } }).select('_id').lean();
+  if (!admins.length) return;
+
+  const title = 'New Onboarding Request';
+  const body = `${owner} submitted an onboarding request for ${locationName}.`;
+
+  for (const a of admins) {
+    const adminId = a._id;
+    // eslint-disable-next-line no-await-in-loop
+    const existing = await UserNotification.findOne({
+      userId: adminId,
+      ticketId: requestId,
+      channel: STATUS_CHANNEL,
+      kind: 'onboarding:new',
+      dismissedAt: null,
+    })
+      .select('_id')
+      .lean();
+    if (existing) continue;
+
+    // eslint-disable-next-line no-await-in-loop
+    const doc = await UserNotification.create({
+      userId: adminId,
+      channel: STATUS_CHANNEL,
+      kind: 'onboarding:new',
+      ticketId: requestId,
+      title,
+      body,
+    });
+
+    const createdAt =
+      doc && doc.createdAt instanceof Date
+        ? doc.createdAt.toISOString()
+        : new Date().toISOString();
+
+    emitUserNotification(String(adminId), {
+      id: String(doc._id),
+      channel: STATUS_CHANNEL,
+      kind: 'onboarding:new',
+      ticketId: String(requestId),
+      title,
+      body,
+      createdAt,
+    });
+  }
+}
+
+/**
  * @param {{ id: string }} actor
  * @param {{ channel?: string }} query
  */
