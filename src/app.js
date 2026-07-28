@@ -10,6 +10,7 @@ import analyticsRoutes from './routes/analyticsRoutes.js';
 import boardApiRoutes from './routes/boardApiRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import onboardingRoutes from './routes/onboardingRoutes.js';
+import assetRoutes from './routes/assetRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { mountSwagger } from './config/swagger.js';
 import { getMailConfigStatus, verifyMailConnection } from './services/mailSender.js';
@@ -55,6 +56,7 @@ app.use('/api/conversations', conversationRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/assets', assetRoutes);
 app.use('/api', boardApiRoutes);
 
 app.use((_req, _res, next) => {
