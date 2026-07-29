@@ -2,18 +2,19 @@ import fs from 'fs';
 import {
   createAsset,
   listAssets,
+  getAssetById,
   getAssetFilePath,
   removeAsset,
   removeAssetLocation,
 } from '../services/assetService.js';
 import { AppError } from '../utils/AppError.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 
 /**
  * multer turns repeated form fields into an array only when there are 2+ values;
- * a single selection arrives as a plain string. Normalize both cases without
- * ever throwing on a plain (non-JSON) id string.
+ * a single selection arrives as a plain string. Normalize both cases.
  */
-function normalizeLocationIds(input) {
+export function normalizeLocationIds(input) {
   if (!input) return [];
   const values = Array.isArray(input) ? input : [input];
   return values.flatMap((v) => {
@@ -31,81 +32,173 @@ function normalizeLocationIds(input) {
   });
 }
 
-export async function uploadAsset(req, res, next) {
-  try {
+function actorFromReq(req) {
+  return {
+    role: req.user.role,
+    locationId: req.user.locationId ? String(req.user.locationId) : null,
+  };
+}
+
+export const uploadAsset = asyncHandler(async (req, res) => {
+  if (!req.file) throw new AppError('No file uploaded', 400);
+
+  const {
+    category,
+    visibility = 'global',
+    locationIds,
+    type,
+    name,
+    Name,
+  } = req.body;
+
+  if (!['documents', 'marketing_assets'].includes(category)) {
+    throw new AppError('category must be documents or marketing_assets', 400);
+  }
+
+  const result = await createAsset({
+    file: req.file,
+    category,
+    visibility,
+    locationIds: normalizeLocationIds(locationIds),
+    type,
+    name: name || Name,
+    userId: req.user.id,
+  });
+
+  res.status(201).json(result);
+});
+
+export const listAssetsHandler = asyncHandler(async (req, res) => {
+  const { category } = req.query;
+  const result = await listAssets({
+    ...actorFromReq(req),
+    category,
+  });
+  res.json(result);
+});
+
+export const getAssetHandler = asyncHandler(async (req, res) => {
+  const result = await getAssetById(req.params.id, actorFromReq(req));
+  res.json(result);
+});
+
+export const serveAssetFile = asyncHandler(async (req, res) => {
+  const fileInfo = await getAssetFilePath(req.params.id, actorFromReq(req));
+  const encodedName = encodeURIComponent(fileInfo.originalName);
+  const asDownload =
+    req.query.download === '1' ||
+    req.query.download === 'true' ||
+    String(req.query.disposition || '').toLowerCase() === 'attachment';
+  const disposition = asDownload ? 'attachment' : 'inline';
+
+  if (fileInfo.redirect && fileInfo.fileUrl) {
+    // Proxy from R2 so the browser gets a same-origin response (download works; no CORS).
+    const upstream = await fetch(fileInfo.fileUrl);
+    if (!upstream.ok) {
+      throw new AppError('File not found on storage', 404);
+    }
+    const contentType =
+      upstream.headers.get('content-type') ||
+      fileInfo.mimeType ||
+      'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `${disposition}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
+    );
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    res.send(buf);
+    return;
+  }
+
+  res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
+  res.setHeader(
+    'Content-Disposition',
+    `${disposition}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
+  );
+  fs.createReadStream(fileInfo.filePath).pipe(res);
+});
+
+export const deleteAssetHandler = asyncHandler(async (req, res) => {
+  const result = await removeAsset(req.params.id);
+  res.json(result);
+});
+
+export const removeAssetLocationHandler = asyncHandler(async (req, res) => {
+  const result = await removeAssetLocation(req.params.id, req.params.locationId);
+  res.json(result);
+});
+
+/** Fixed-category upload used by /api/documents and /api/marketing-assets */
+export function makeCategoryUploadHandler(category) {
+  return asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('No file uploaded', 400);
 
-    const { category, visibility = 'global', locationIds, type } = req.body;
-    if (!['documents', 'marketing_assets'].includes(category)) {
-      throw new AppError('category must be documents or marketing_assets', 400);
-    }
-
-    const parsedLocationIds = normalizeLocationIds(locationIds);
+    const {
+      visibility = 'global',
+      locationIds,
+      type,
+      name,
+      Name,
+    } = req.body;
 
     const result = await createAsset({
       file: req.file,
       category,
       visibility,
-      locationIds: parsedLocationIds,
+      locationIds: normalizeLocationIds(locationIds),
       type,
+      name: name || Name,
       userId: req.user.id,
     });
 
-    res.status(201).json(result);
-  } catch (err) {
-    if (req.file?.path) {
-      await fs.promises.unlink(req.file.path).catch(() => {});
+    // Match Document-oriented response shape for dedicated routes
+    if (category === 'documents') {
+      res.status(201).json({ document: result.asset });
+      return;
     }
-    next(err);
-  }
+    res.status(201).json({ asset: result.asset });
+  });
 }
 
-export async function listAssetsHandler(req, res, next) {
-  try {
-    const { category } = req.query;
-    if (!['documents', 'marketing_assets'].includes(category)) {
-      throw new AppError('category must be documents or marketing_assets', 400);
-    }
+export function makeCategoryListHandler(category) {
+  return asyncHandler(async (req, res) => {
     const result = await listAssets({
-      role: req.user.role,
-      locationId: req.user.locationId ? String(req.user.locationId) : null,
+      ...actorFromReq(req),
       category,
     });
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
+    if (category === 'documents') {
+      res.json({ documents: result.assets });
+      return;
+    }
+    res.json({ assets: result.assets });
+  });
 }
 
-export async function serveAssetFile(req, res, next) {
-  try {
-    const { filePath, originalName, mimeType } = await getAssetFilePath(req.params.id, {
-      role: req.user.role,
-      locationId: req.user.locationId ? String(req.user.locationId) : null,
+export function makeCategoryGetHandler(category) {
+  return asyncHandler(async (req, res) => {
+    const result = await getAssetById(req.params.id, actorFromReq(req));
+    if (result.asset.category !== category) {
+      throw new AppError('Not found', 404);
+    }
+    if (category === 'documents') {
+      res.json({ document: result.asset });
+      return;
+    }
+    res.json({ asset: result.asset });
+  });
+}
+
+export function makeCategoryDeleteHandler(category) {
+  return asyncHandler(async (req, res) => {
+    const existing = await getAssetById(req.params.id, {
+      role: 'admin',
+      locationId: null,
     });
-    const encodedName = encodeURIComponent(originalName);
-    res.setHeader('Content-Type', mimeType || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${encodedName}"`);
-    fs.createReadStream(filePath).pipe(res);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function deleteAssetHandler(req, res, next) {
-  try {
+    if (existing.asset.category !== category) {
+      throw new AppError('Not found', 404);
+    }
     const result = await removeAsset(req.params.id);
     res.json(result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function removeAssetLocationHandler(req, res, next) {
-  try {
-    const result = await removeAssetLocation(req.params.id, req.params.locationId);
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
+  });
 }

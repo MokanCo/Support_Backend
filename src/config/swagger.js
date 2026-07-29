@@ -26,6 +26,9 @@ const swaggerDefinition = {
     { name: 'Ticket internal notes', description: 'Staff-only notes on tickets (admin & support)' },
     { name: 'Messages', description: 'Ticket conversation messages' },
     { name: 'Onboarding', description: 'Public location onboarding wizard and admin review' },
+    { name: 'Documents', description: 'Document upload/list/delete (files stored in Cloudflare R2)' },
+    { name: 'Marketing Assets', description: 'Marketing asset upload/list/delete (Cloudflare R2)' },
+    { name: 'Assets', description: 'Shared assets API (documents + marketing_assets by category)' },
     { name: 'System', description: 'Operational endpoints' },
   ],
   components: {

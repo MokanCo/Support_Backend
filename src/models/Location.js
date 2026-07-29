@@ -30,11 +30,12 @@ const locationSchema = new mongoose.Schema(
     zip: { type: String, default: '', trim: true },
     isDisabled: { type: Boolean, default: false, index: true },
     /** HQ / primary site — only one; cannot be deleted. */
-    isPrimary: { type: Boolean, default: false, index: true },
+    isPrimary: { type: Boolean, default: false },
   },
   { timestamps: true },
 );
 
+// Partial unique index only (avoid also setting index: true on the field — that duplicates this).
 locationSchema.index(
   { isPrimary: 1 },
   { unique: true, partialFilterExpression: { isPrimary: true } },
