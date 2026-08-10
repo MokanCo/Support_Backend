@@ -9,6 +9,21 @@ import { runOpeningDateJobs } from './services/onboardingScheduler.js';
 
 const PORT = Number(process.env.PORT) || 5000;
 
+// Without these, any single unhandled async error anywhere in the request
+// pipeline (a stray promise rejection, an SDK edge case, etc.) kills the
+// entire process — every in-flight request gets a 502, not just the one
+// that triggered it. Logging instead of crashing keeps the server serving
+// other requests while still surfacing the real error for diagnosis.
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error('[unhandledRejection]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('[uncaughtException]', err);
+});
+
 async function bootstrap() {
   await connectDb();
   try {
