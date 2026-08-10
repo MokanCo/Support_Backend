@@ -6,6 +6,7 @@ import { logMailProviderStatus } from './services/mailSender.js';
 import { attachSocketServer } from './realtime/socketServer.js';
 import { syncServiceTemplates } from './services/onboardingTemplateService.js';
 import { runOpeningDateJobs } from './services/onboardingScheduler.js';
+import { runArSchedulerTick } from './services/ar/arScheduler.js';
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -55,6 +56,19 @@ async function bootstrap() {
   };
   await runScheduler();
   setInterval(() => { void runScheduler(); }, SCHEDULER_INTERVAL_MS);
+
+  // AR automation: check hourly; jobs self-gate to once per calendar day
+  const AR_TICK_MS = 60 * 60 * 1000;
+  const runArTick = async () => {
+    try {
+      await runArSchedulerTick();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[scheduler] AR tick failed', e);
+    }
+  };
+  await runArTick();
+  setInterval(() => { void runArTick(); }, AR_TICK_MS);
 
   const shutdown = () => {
     server.close(() => process.exit(0));

@@ -13,6 +13,7 @@ import onboardingRoutes from './routes/onboardingRoutes.js';
 import assetRoutes from './routes/assetRoutes.js';
 import documentRoutes from './routes/documentRoutes.js';
 import marketingAssetRoutes from './routes/marketingAssetRoutes.js';
+import arRoutes from './routes/arRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { mountSwagger } from './config/swagger.js';
 import { getMailConfigStatus, verifyMailConnection } from './services/mailSender.js';
@@ -61,6 +62,7 @@ app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/marketing-assets', marketingAssetRoutes);
+app.use('/api/ar', arRoutes);
 app.use('/api', boardApiRoutes);
 
 app.use((_req, _res, next) => {
