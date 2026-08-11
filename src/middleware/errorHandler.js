@@ -21,6 +21,17 @@ export function errorHandler(err, req, res, next) {
     return send(res, err.statusCode, err.message);
   }
 
+  // Multer upload errors (file size, unexpected field, etc.)
+  if (err && typeof err === 'object' && 'code' in err && typeof err.code === 'string') {
+    const code = err.code;
+    if (code === 'LIMIT_FILE_SIZE') {
+      return send(res, 400, 'File exceeds maximum size of 50 MB');
+    }
+    if (code.startsWith('LIMIT_')) {
+      return send(res, 400, String(err.message || 'Invalid upload'));
+    }
+  }
+
   if (err instanceof mongoose.Error.ValidationError) {
     const message = Object.values(err.errors).map((e) => e.message).join(', ');
     return send(res, 400, message);

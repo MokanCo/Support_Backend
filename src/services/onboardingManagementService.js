@@ -163,8 +163,10 @@ export async function recalculateProgress(requestId) {
     }
     return { progressPercent, total, completed, status: 'completed' };
   }
-  request.progressPercent = progressPercent;
-  await request.save();
+  await OnboardingRequest.updateOne(
+    { _id: requestId },
+    { $set: { progressPercent } },
+  );
   return { progressPercent, total, completed, status: request.status };
 }
 

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 
 export const ONBOARDING_STATUSES = [
@@ -47,7 +48,7 @@ const onboardingRequestSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
-    trackingToken: { type: String, required: true, unique: true, index: true },
+    trackingToken: { type: String, required: true, unique: true },
     status: {
       type: String,
       enum: ONBOARDING_STATUSES,
@@ -74,5 +75,13 @@ const onboardingRequestSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+// Older rows may lack trackingToken; generate one before validation so scheduler saves succeed.
+onboardingRequestSchema.pre('validate', function ensureTrackingToken(next) {
+  if (!this.trackingToken) {
+    this.trackingToken = crypto.randomBytes(24).toString('hex');
+  }
+  next();
+});
 
 export default mongoose.model('OnboardingRequest', onboardingRequestSchema);
