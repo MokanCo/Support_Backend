@@ -625,6 +625,16 @@ router.post('/payments', roleMiddleware(['admin']), ar.recordPayment);
  */
 router.delete('/payments/:id', roleMiddleware(['admin']), ar.deletePayment);
 
+// Partner self-reports "I sent payment" (pending admin verification) — access
+// scoping enforced in the service via getInvoice(). Admin lists/reviews the queue.
+router.post('/invoices/:id/payment-submissions', ar.submitInvoicePayment);
+router.get('/payment-submissions', roleMiddleware(['admin', 'support']), ar.listPaymentSubmissions);
+router.post(
+  '/payment-submissions/:id/review',
+  roleMiddleware(['admin']),
+  ar.reviewPaymentSubmission,
+);
+
 /**
  * @swagger
  * /api/ar/credits:

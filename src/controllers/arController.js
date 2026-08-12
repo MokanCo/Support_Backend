@@ -4,6 +4,7 @@ import * as productService from '../services/ar/arProductService.js';
 import * as billingService from '../services/ar/arBillingProfileService.js';
 import * as invoiceService from '../services/ar/arInvoiceService.js';
 import * as paymentService from '../services/ar/arPaymentService.js';
+import * as paymentSubmissionService from '../services/ar/arPaymentSubmissionService.js';
 import * as creditService from '../services/ar/arCreditService.js';
 import * as recurringService from '../services/ar/arRecurringService.js';
 import * as statementService from '../services/ar/arStatementService.js';
@@ -179,6 +180,22 @@ export const recordPayment = asyncHandler(async (req, res) => {
 
 export const deletePayment = asyncHandler(async (req, res) => {
   res.json(await paymentService.deletePayment(actor(req), req.params.id, ip(req)));
+});
+
+export const submitInvoicePayment = asyncHandler(async (req, res) => {
+  res
+    .status(201)
+    .json(await paymentSubmissionService.submitPayment(actor(req), req.params.id, req.body));
+});
+
+export const listPaymentSubmissions = asyncHandler(async (req, res) => {
+  res.json(await paymentSubmissionService.listSubmissions(actor(req), req.query));
+});
+
+export const reviewPaymentSubmission = asyncHandler(async (req, res) => {
+  res.json(
+    await paymentSubmissionService.reviewSubmission(actor(req), req.params.id, req.body),
+  );
 });
 
 export const listCredits = asyncHandler(async (req, res) => {
