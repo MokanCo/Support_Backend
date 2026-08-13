@@ -29,6 +29,7 @@ function formatSettings(doc) {
       type: m.type,
       label: m.label,
       details: m.details,
+      displayName: m.displayName || '',
       recipientEmail: m.recipientEmail || '',
       recipientPhone: m.recipientPhone || '',
       qrCodeUrl: m.qrCodeUrl || '',

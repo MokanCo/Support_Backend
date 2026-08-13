@@ -42,8 +42,11 @@ const arSettingsSchema = new mongoose.Schema(
           },
           label: { type: String, required: true },
           details: { type: String, default: '' },
+          /** Display name shown on Zelle (optional). */
+          displayName: { type: String, default: '' },
           recipientEmail: { type: String, default: '' },
           recipientPhone: { type: String, default: '' },
+          /** Official Zelle QR image URL (upload or external). Not a link to our invoice page. */
           qrCodeUrl: { type: String, default: '' },
           enabled: { type: Boolean, default: true },
         },

@@ -8,6 +8,8 @@ const arProductSchema = new mongoose.Schema(
     price: { type: Number, required: true, min: 0 },
     taxable: { type: Boolean, default: false },
     taxPercentage: { type: Number, default: 0, min: 0, max: 100 },
+    /** When true, auto-added as a line item on new invoices. */
+    isRequired: { type: Boolean, default: false, index: true },
     accountingCategory: { type: String, default: '', trim: true },
     isActive: { type: Boolean, default: true, index: true },
     isArchived: { type: Boolean, default: false, index: true },

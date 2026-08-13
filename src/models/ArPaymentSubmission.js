@@ -22,12 +22,20 @@ const arPaymentSubmissionSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     amount: { type: Number, required: true, min: 0.01 },
     paymentMethod: { type: String, enum: AR_PAYMENT_METHODS, default: 'zelle' },
     paymentDate: { type: Date, default: () => new Date() },
     transactionReference: { type: String, default: '', trim: true },
     notes: { type: String, default: '' },
+    /** Optional screenshot / proof uploaded from the public invoice page. */
+    proofUrl: { type: String, default: '' },
+    /** How the claim was filed: partner portal vs public token page. */
+    source: {
+      type: String,
+      enum: ['partner_portal', 'public_invoice', 'admin'],
+      default: 'partner_portal',
+    },
     status: {
       type: String,
       enum: ['pending', 'approved', 'rejected'],

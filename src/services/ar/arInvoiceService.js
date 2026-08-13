@@ -16,6 +16,7 @@ import { writeArAudit } from './arAuditService.js';
 import { getOrCreateSettings } from './arSettingsService.js';
 import { generateInvoicePdfBuffer } from './arPdfService.js';
 import { sendInvoiceEmail } from './arMailService.js';
+import { ensurePublicPaymentToken } from './arPublicInvoiceService.js';
 
 function calcLine(item) {
   const quantity = Number(item.quantity) || 0;
@@ -120,6 +121,7 @@ function formatInvoice(doc, locationName = '') {
     attachments: d.attachments || [],
     timeline: d.timeline || [],
     pdfUrl: d.pdfUrl,
+    publicPaymentToken: d.publicPaymentToken || null,
     sentAt: d.sentAt,
     viewedAt: d.viewedAt,
     paidAt: d.paidAt,
@@ -183,6 +185,14 @@ export async function getInvoice(actor, id) {
   const doc = await ArInvoice.findOne({ _id: id, isDeleted: { $ne: true } });
   if (!doc) throw new AppError('Invoice not found', 404);
   assertCanAccessLocation(actor, doc.locationId);
+  // Ensure partners/admins can open the same public Pay Now URL as the email.
+  if (
+    doc.invoiceNumber &&
+    !['draft', 'void', 'cancelled'].includes(doc.status) &&
+    (!doc.publicPaymentToken || doc.publicPaymentTokenRevokedAt)
+  ) {
+    await ensurePublicPaymentToken(doc);
+  }
   const location = await Location.findById(doc.locationId).lean();
   return { invoice: formatInvoice(doc, location?.name || '') };
 }
@@ -334,6 +344,8 @@ export async function sendInvoice(actor, id, ipAddress = '') {
   }
   if (!doc.invoiceNumber) doc.invoiceNumber = await nextInvoiceNumber();
 
+  const publicToken = await ensurePublicPaymentToken(doc);
+
   const location = await Location.findById(doc.locationId).lean();
   const profile = await ArBillingProfile.findOne({ locationId: doc.locationId }).lean();
 
@@ -342,6 +354,7 @@ export async function sendInvoice(actor, id, ipAddress = '') {
     location,
     profile,
     kind: 'sent',
+    publicToken,
   });
 
   doc.sentAt = new Date();

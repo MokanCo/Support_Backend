@@ -80,6 +80,13 @@ const arInvoiceSchema = new mongoose.Schema(
     total: { type: Number, default: 0, min: 0 },
     amountPaid: { type: Number, default: 0, min: 0 },
     balanceDue: { type: Number, default: 0, min: 0 },
+    /**
+     * Secure, random public payment token for unauthenticated /invoice/pay access.
+     * Not derived from invoice/partner IDs. Revoke by clearing or setting revokedAt.
+     */
+    publicPaymentToken: { type: String, default: null, index: true, sparse: true, unique: true },
+    publicPaymentTokenCreatedAt: { type: Date, default: null },
+    publicPaymentTokenRevokedAt: { type: Date, default: null },
     attachments: { type: [attachmentSchema], default: [] },
     timeline: { type: [timelineSchema], default: [] },
     pdfUrl: { type: String, default: '' },

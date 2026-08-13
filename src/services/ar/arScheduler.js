@@ -5,6 +5,7 @@ import ArJobRun from '../../models/ArJobRun.js';
 import Location from '../../models/Location.js';
 import { generateFromTemplate } from './arRecurringService.js';
 import { sendInvoiceEmail } from './arMailService.js';
+import { ensurePublicPaymentToken } from './arPublicInvoiceService.js';
 import { pushTimeline, recalculateTotals } from './arInvoiceService.js';
 import { getOrCreateSettings } from './arSettingsService.js';
 import { generateStatement } from './arStatementService.js';
@@ -113,7 +114,9 @@ export async function runReminderScheduler() {
         const location = await Location.findById(inv.locationId).lean();
         const kind = offsetDays > 0 ? 'overdue' : 'reminder';
         // eslint-disable-next-line no-await-in-loop
-        await sendInvoiceEmail({ invoice: inv, location, profile, kind });
+        const publicToken = await ensurePublicPaymentToken(inv);
+        // eslint-disable-next-line no-await-in-loop
+        await sendInvoiceEmail({ invoice: inv, location, profile, kind, publicToken });
         inv.lastReminderAt = new Date();
         inv.lastReminderDayOffset = offsetDays;
         pushTimeline(inv, {
@@ -194,7 +197,9 @@ export async function runLateFeeScheduler() {
         // eslint-disable-next-line no-await-in-loop
         const location = await Location.findById(inv.locationId).lean();
         // eslint-disable-next-line no-await-in-loop
-        await sendInvoiceEmail({ invoice: inv, location, profile, kind: 'late_fee' });
+        const publicToken = await ensurePublicPaymentToken(inv);
+        // eslint-disable-next-line no-await-in-loop
+        await sendInvoiceEmail({ invoice: inv, location, profile, kind: 'late_fee', publicToken });
         success += 1;
       } catch (e) {
         failure += 1;

@@ -13,6 +13,7 @@ function formatProduct(doc) {
     price: d.price,
     taxable: d.taxable,
     taxPercentage: d.taxPercentage,
+    isRequired: Boolean(d.isRequired),
     accountingCategory: d.accountingCategory,
     isActive: d.isActive,
     isArchived: d.isArchived,
@@ -64,6 +65,7 @@ export async function createProduct(actor, input, ipAddress = '') {
     price: money(input.price),
     taxable: Boolean(input.taxable),
     taxPercentage: money(input.taxPercentage),
+    isRequired: Boolean(input.isRequired),
     accountingCategory: String(input.accountingCategory || '').trim(),
     isActive: input.isActive !== false,
     createdBy: actor.id,
@@ -91,6 +93,7 @@ export async function updateProduct(actor, id, patch, ipAddress = '') {
   if (patch.price !== undefined) doc.price = money(patch.price);
   if (patch.taxable !== undefined) doc.taxable = Boolean(patch.taxable);
   if (patch.taxPercentage !== undefined) doc.taxPercentage = money(patch.taxPercentage);
+  if (patch.isRequired !== undefined) doc.isRequired = Boolean(patch.isRequired);
   if (patch.accountingCategory !== undefined) {
     doc.accountingCategory = String(patch.accountingCategory).trim();
   }

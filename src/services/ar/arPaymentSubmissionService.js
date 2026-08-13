@@ -21,6 +21,8 @@ function formatSubmission(doc, extra = {}) {
     paymentDate: d.paymentDate,
     transactionReference: d.transactionReference,
     notes: d.notes,
+    proofUrl: d.proofUrl || '',
+    source: d.source || 'partner_portal',
     status: d.status,
     reviewedBy: d.reviewedBy ? String(d.reviewedBy) : null,
     reviewedAt: d.reviewedAt,
@@ -36,7 +38,7 @@ function formatSubmission(doc, extra = {}) {
  * self-reported intent. Nothing here touches the invoice's balance/status;
  * that only happens if/when an admin approves it (reviewSubmission below).
  */
-export async function submitPayment(actor, invoiceId, { amount, paymentMethod, transactionReference, notes } = {}) {
+export async function submitPayment(actor, invoiceId, { amount, paymentMethod, transactionReference, notes, paymentDate } = {}) {
   const { invoice } = await getInvoice(actor, invoiceId); // throws if not found / not accessible
 
   const numericAmount = money(amount);
@@ -47,14 +49,27 @@ export async function submitPayment(actor, invoiceId, { amount, paymentMethod, t
     throw new AppError('A payment method is required', 400);
   }
 
+  const pending = await ArPaymentSubmission.findOne({
+    invoiceId: toObjectId(invoice.id, 'invoiceId'),
+    status: 'pending',
+  }).lean();
+  if (pending) {
+    throw new AppError(
+      'A payment confirmation is already pending verification for this invoice',
+      409,
+    );
+  }
+
   const doc = await ArPaymentSubmission.create({
     invoiceId: toObjectId(invoice.id, 'invoiceId'),
     locationId: toObjectId(invoice.locationId, 'locationId'),
     submittedBy: actor.id,
     amount: numericAmount,
     paymentMethod,
+    paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
     transactionReference: String(transactionReference || '').trim(),
     notes: String(notes || '').trim(),
+    source: 'partner_portal',
   });
 
   await createArPaymentSubmittedAdminNotification({
@@ -89,14 +104,28 @@ export async function listSubmissions(actor, { status = 'pending' } = {}) {
   const rows = await ArPaymentSubmission.find(filter).sort({ createdAt: -1 }).limit(200).lean();
   if (!rows.length) return { submissions: [] };
 
-  const invoiceIds = [...new Set(rows.map((r) => String(r.invoiceId)))];
-  const locationIds = [...new Set(rows.map((r) => String(r.locationId)))];
-  const submitterIds = [...new Set(rows.map((r) => String(r.submittedBy)).filter(Boolean))];
+  const invoiceIds = [...new Set(rows.map((r) => String(r.invoiceId)).filter(Boolean))];
+  const locationIds = [...new Set(rows.map((r) => String(r.locationId)).filter(Boolean))];
+  // Public invoice submissions have submittedBy: null — never String(null) → "null"
+  const submitterIds = [
+    ...new Set(
+      rows
+        .map((r) => r.submittedBy)
+        .filter((id) => id != null && id !== '')
+        .map((id) => String(id)),
+    ),
+  ];
 
   const [invoices, locations, submitters] = await Promise.all([
-    ArInvoice.find({ _id: { $in: invoiceIds } }).select('invoiceNumber').lean(),
-    Location.find({ _id: { $in: locationIds } }).select('name').lean(),
-    User.find({ _id: { $in: submitterIds } }).select('name email').lean(),
+    invoiceIds.length
+      ? ArInvoice.find({ _id: { $in: invoiceIds } }).select('invoiceNumber').lean()
+      : Promise.resolve([]),
+    locationIds.length
+      ? Location.find({ _id: { $in: locationIds } }).select('name').lean()
+      : Promise.resolve([]),
+    submitterIds.length
+      ? User.find({ _id: { $in: submitterIds } }).select('name email').lean()
+      : Promise.resolve([]),
   ]);
 
   const invoiceMap = new Map(invoices.map((i) => [String(i._id), i.invoiceNumber || '']));
@@ -145,13 +174,17 @@ export async function reviewSubmission(actor, id, { decision, note } = {}) {
 
   // Approve: reuse the existing, already-tested recordPayment flow rather
   // than re-implementing balance/status updates or the receipt email here.
+  const verifiedLabel =
+    doc.source === 'public_invoice'
+      ? 'Public invoice confirmation, admin-verified'
+      : 'Partner-reported, admin-verified';
   const { payment } = await recordPayment(actor, {
     invoiceId: String(doc.invoiceId),
     amount: doc.amount,
     paymentDate: doc.paymentDate,
     paymentMethod: doc.paymentMethod,
     transactionReference: doc.transactionReference,
-    notes: doc.notes ? `${doc.notes} (partner-reported, admin-verified)` : 'Partner-reported, admin-verified',
+    notes: doc.notes ? `${doc.notes} (${verifiedLabel})` : verifiedLabel,
   });
 
   doc.status = 'approved';
