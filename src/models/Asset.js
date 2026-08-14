@@ -21,7 +21,7 @@ import mongoose from 'mongoose';
  *         locationIds:
  *           type: array
  *           items: { type: string }
- *         type: { type: string, enum: [postcard, banner, logo, other], nullable: true }
+ *         type: { type: string, enum: [postcard, banner, logo, video, other], nullable: true }
  *         uploadedBy: { type: string }
  *         createdAt: { type: string, format: date-time }
  *         updatedAt: { type: string, format: date-time }
@@ -34,6 +34,9 @@ const assetSchema = new mongoose.Schema(
     storedName: { type: String, default: '', trim: true },
     fileUrl: { type: String, default: '', trim: true },
     storageKey: { type: String, default: '', trim: true },
+    /** JPEG/WebP frame for video cards (and optional future use). */
+    thumbnailUrl: { type: String, default: '', trim: true },
+    thumbnailStorageKey: { type: String, default: '', trim: true },
     mimeType: { type: String, required: true, trim: true },
     size: { type: Number, required: true },
     category: {
@@ -50,7 +53,7 @@ const assetSchema = new mongoose.Schema(
     locationIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Location' }],
     type: {
       type: String,
-      enum: ['postcard', 'banner', 'logo', 'other'],
+      enum: ['postcard', 'banner', 'logo', 'video', 'other'],
       required: false,
     },
     uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

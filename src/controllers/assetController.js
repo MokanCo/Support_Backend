@@ -83,12 +83,20 @@ export const getAssetHandler = asyncHandler(async (req, res) => {
 });
 
 export const serveAssetFile = asyncHandler(async (req, res) => {
-  const fileInfo = await getAssetFilePath(req.params.id, actorFromReq(req));
+  const actor = actorFromReq(req);
+  const fileInfo = await getAssetFilePath(req.params.id, actor);
   const encodedName = encodeURIComponent(fileInfo.originalName);
   const asDownload =
     req.query.download === '1' ||
     req.query.download === 'true' ||
     String(req.query.disposition || '').toLowerCase() === 'attachment';
+  const isVideo = String(fileInfo.mimeType || '').startsWith('video/');
+
+  // Partners may stream/view videos inline but cannot download them.
+  if (asDownload && isVideo && actor.role === 'partner') {
+    throw new AppError('Partners can view videos but cannot download them', 403);
+  }
+
   const disposition = asDownload ? 'attachment' : 'inline';
 
   if (fileInfo.redirect && fileInfo.fileUrl) {
