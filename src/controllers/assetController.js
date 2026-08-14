@@ -92,15 +92,29 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
     String(req.query.disposition || '').toLowerCase() === 'attachment';
   const isVideo = String(fileInfo.mimeType || '').startsWith('video/');
 
-  // Partners may stream/view videos inline but cannot download them.
-  if (asDownload && isVideo && actor.role === 'partner') {
-    throw new AppError('Partners can view videos but cannot download them', 403);
+  // Videos: only admins may request attachment/download. Everyone else can
+  // stream inline for playback only (no Content-Disposition: attachment).
+  if (asDownload && isVideo && actor.role !== 'admin') {
+    throw new AppError('Only admins can download videos', 403);
   }
 
   const disposition = asDownload ? 'attachment' : 'inline';
+  const contentDisposition = asDownload
+    ? `${disposition}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`
+    : // Omit filename on inline video to discourage "Save as" from headers.
+      isVideo
+      ? 'inline'
+      : `${disposition}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`;
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (isVideo) {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  }
 
   if (fileInfo.redirect && fileInfo.fileUrl) {
-    // Proxy from R2 so the browser gets a same-origin response (download works; no CORS).
+    // Always proxy from R2 — never redirect the browser to the public CDN URL
+    // (that would expose a copyable direct download link).
     const upstream = await fetch(fileInfo.fileUrl);
     if (!upstream.ok) {
       throw new AppError('File not found on storage', 404);
@@ -110,20 +124,14 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
       fileInfo.mimeType ||
       'application/octet-stream';
     res.setHeader('Content-Type', contentType);
-    res.setHeader(
-      'Content-Disposition',
-      `${disposition}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
-    );
+    res.setHeader('Content-Disposition', contentDisposition);
     const buf = Buffer.from(await upstream.arrayBuffer());
     res.send(buf);
     return;
   }
 
   res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
-  res.setHeader(
-    'Content-Disposition',
-    `${disposition}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
-  );
+  res.setHeader('Content-Disposition', contentDisposition);
   fs.createReadStream(fileInfo.filePath).pipe(res);
 });
 
