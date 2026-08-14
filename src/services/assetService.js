@@ -8,10 +8,12 @@ import {
   uploadFile as uploadToR2,
 } from './cloudflareR2StorageService.js';
 import { maybeConvertImageToWebp } from './imageOptimizeService.js';
+import { maybeConvertVideoToWebm } from './videoOptimizeService.js';
 
 export const ASSET_UPLOAD_ROOT = path.join(process.cwd(), 'uploads', 'assets');
 
-export const MAX_ASSET_FILE_SIZE = 50 * 1024 * 1024;
+/** 100 MB — videos need headroom before WebM conversion. */
+export const MAX_ASSET_FILE_SIZE = 100 * 1024 * 1024;
 
 export const ALLOWED_ASSET_EXTENSIONS = new Set([
   '.pdf',
@@ -30,6 +32,16 @@ export const ALLOWED_ASSET_EXTENSIONS = new Set([
   '.webp',
   '.svg',
   '.zip',
+  '.mp4',
+  '.mov',
+  '.avi',
+  '.mkv',
+  '.m4v',
+  '.webm',
+  '.mpeg',
+  '.mpg',
+  '.wmv',
+  '.3gp',
 ]);
 
 export function validateAssetFile(file) {
@@ -37,7 +49,7 @@ export function validateAssetFile(file) {
   const size = file.size ?? file.buffer?.length ?? 0;
   if (!size) throw new AppError('File is empty', 400);
   if (size > MAX_ASSET_FILE_SIZE) {
-    throw new AppError('File exceeds maximum size of 50 MB', 400);
+    throw new AppError('File exceeds maximum size of 100 MB', 400);
   }
   const ext = path.extname(file.originalname || '').toLowerCase();
   if (!ALLOWED_ASSET_EXTENSIONS.has(ext)) {
@@ -58,6 +70,7 @@ function formatAsset(doc) {
     originalFileName,
     originalName: originalFileName,
     fileUrl: d.fileUrl || '',
+    thumbnailUrl: d.thumbnailUrl || '',
     contentType: d.mimeType,
     mimeType: d.mimeType,
     fileSize: d.size,
@@ -99,11 +112,44 @@ async function storeFileLocally(file) {
 }
 
 /**
- * Convert images to WebP (when applicable), then upload to R2 or local disk.
+ * Convert images → WebP and videos → WebM (+ thumbnail), then upload to R2 or local disk.
  */
 async function persistUpload(file, category) {
   validateAssetFile(file);
-  const optimized = await maybeConvertImageToWebp(file);
+  let optimized = await maybeConvertImageToWebp(file);
+  if (!optimized.converted) {
+    optimized = await maybeConvertVideoToWebm(optimized);
+  }
+
+  let thumbnailUrl = '';
+  let thumbnailStorageKey = '';
+
+  async function persistThumbnail(thumb) {
+    if (!thumb?.buffer?.length) return;
+    if (isR2Configured(category)) {
+      const uploaded = await uploadToR2(
+        {
+          buffer: thumb.buffer,
+          originalname: thumb.originalname,
+          mimetype: thumb.mimetype,
+          size: thumb.size,
+        },
+        { category, folder: `${category === 'marketing_assets' ? 'marketing-assets' : 'documents'}/thumbnails` },
+      );
+      thumbnailUrl = uploaded.fileUrl;
+      thumbnailStorageKey = uploaded.key;
+      return;
+    }
+    const local = await storeFileLocally({
+      buffer: thumb.buffer,
+      originalname: thumb.originalname,
+      mimetype: thumb.mimetype,
+      size: thumb.size,
+    });
+    thumbnailStorageKey = local.storedName;
+    // Local disk has no public CDN URL; card falls back to play-only until R2 is used.
+    thumbnailUrl = '';
+  }
 
   if (isR2Configured(category)) {
     const uploaded = await uploadToR2(
@@ -115,6 +161,7 @@ async function persistUpload(file, category) {
       },
       { category },
     );
+    await persistThumbnail(optimized.thumbnail);
     return {
       storageKey: uploaded.key,
       fileUrl: uploaded.fileUrl,
@@ -122,7 +169,9 @@ async function persistUpload(file, category) {
       mimeType: uploaded.contentType,
       size: uploaded.fileSize,
       storedOriginalName: optimized.originalname,
-      convertedToWebp: optimized.converted,
+      converted: Boolean(optimized.converted),
+      thumbnailUrl,
+      thumbnailStorageKey,
     };
   }
   const local = await storeFileLocally({
@@ -131,6 +180,7 @@ async function persistUpload(file, category) {
     mimetype: optimized.mimetype,
     size: optimized.size,
   });
+  await persistThumbnail(optimized.thumbnail);
   return {
     storageKey: '',
     fileUrl: '',
@@ -138,7 +188,9 @@ async function persistUpload(file, category) {
     mimeType: local.contentType,
     size: local.fileSize,
     storedOriginalName: optimized.originalname,
-    convertedToWebp: optimized.converted,
+    converted: Boolean(optimized.converted),
+    thumbnailUrl,
+    thumbnailStorageKey,
   };
 }
 
@@ -166,17 +218,14 @@ export async function createAsset({
   const displayName =
     (typeof name === 'string' && name.trim()) || file.originalname;
 
-  // Keep the user's original filename for display; stored file may be .webp
-  const originalNameForDb = stored.convertedToWebp
-    ? stored.storedOriginalName
-    : file.originalname;
-
   const doc = await Asset.create({
     name: displayName,
-    originalName: originalNameForDb,
+    originalName: file.originalname,
     storedName: stored.storedName,
     storageKey: stored.storageKey,
     fileUrl: stored.fileUrl,
+    thumbnailUrl: stored.thumbnailUrl || '',
+    thumbnailStorageKey: stored.thumbnailStorageKey || '',
     mimeType: stored.mimeType,
     size: stored.size,
     category,
