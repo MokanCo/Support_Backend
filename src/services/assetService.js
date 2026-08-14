@@ -60,23 +60,32 @@ export function validateAssetFile(file) {
   }
 }
 
+function isVideoMime(mimeType) {
+  return String(mimeType || '').startsWith('video/');
+}
+
+/**
+ * Public API shape. Video file URLs are never exposed — clients must stream
+ * via the authenticated /file endpoint so CDN links cannot be copied from
+ * list/get responses.
+ */
 function formatAsset(doc) {
   const d = doc && typeof doc.toObject === 'function' ? doc.toObject() : doc;
   const originalFileName = d.originalName;
   const name = (d.name && String(d.name).trim()) || originalFileName;
+  const mimeType = d.mimeType;
   return {
     id: String(d._id),
     name,
     originalFileName,
     originalName: originalFileName,
-    fileUrl: d.fileUrl || '',
+    // Hide direct storage URLs for videos (inspect / Network JSON).
+    fileUrl: isVideoMime(mimeType) ? '' : d.fileUrl || '',
     thumbnailUrl: d.thumbnailUrl || '',
-    contentType: d.mimeType,
-    mimeType: d.mimeType,
+    contentType: mimeType,
+    mimeType,
     fileSize: d.size,
     size: d.size,
-    storedName: d.storedName || '',
-    storageKey: d.storageKey || '',
     category: d.category,
     visibility: d.visibility,
     locationIds: (d.locationIds || []).map(String),
@@ -261,7 +270,7 @@ export async function listAssets({ role, locationId, category }) {
   return { assets: docs.map(formatAsset) };
 }
 
-export async function getAssetById(id, { role, locationId }) {
+async function loadAccessibleAssetDoc(id, { role, locationId }) {
   const doc = await Asset.findOne({ _id: id, isDeleted: { $ne: true } });
   if (!doc) throw new AppError('Asset not found', 404);
 
@@ -276,30 +285,40 @@ export async function getAssetById(id, { role, locationId }) {
     }
   }
 
+  return doc;
+}
+
+export async function getAssetById(id, { role, locationId }) {
+  const doc = await loadAccessibleAssetDoc(id, { role, locationId });
   return { asset: formatAsset(doc) };
 }
 
+/** Internal file info for streaming — uses DB URLs, not the redacted API shape. */
 export async function getAssetFilePath(id, { role, locationId }) {
-  const { asset } = await getAssetById(id, { role, locationId });
+  const doc = await loadAccessibleAssetDoc(id, { role, locationId });
+  const originalName = doc.originalName;
+  const mimeType = doc.mimeType;
 
-  if (asset.fileUrl) {
+  if (doc.fileUrl) {
     return {
-      fileUrl: asset.fileUrl,
-      originalName: asset.originalFileName,
-      mimeType: asset.contentType,
+      fileUrl: doc.fileUrl,
+      originalName,
+      mimeType,
       redirect: true,
+      storedName: doc.storedName || '',
     };
   }
 
-  const filePath = path.join(ASSET_UPLOAD_ROOT, asset.storedName);
-  if (!asset.storedName || !fs.existsSync(filePath)) {
+  const filePath = path.join(ASSET_UPLOAD_ROOT, doc.storedName || '');
+  if (!doc.storedName || !fs.existsSync(filePath)) {
     throw new AppError('File not found on server', 404);
   }
   return {
     filePath,
-    originalName: asset.originalFileName,
-    mimeType: asset.contentType,
+    originalName,
+    mimeType,
     redirect: false,
+    storedName: doc.storedName,
   };
 }
 
