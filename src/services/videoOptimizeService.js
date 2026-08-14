@@ -31,12 +31,22 @@ const CONVERTIBLE_EXT = new Set([
   '.3gp',
 ]);
 
+/** Browser-friendly formats — upload as-is (only thumbnail extracted). */
+const PASSTHROUGH_EXT = new Set(['.mp4', '.m4v', '.webm']);
+const PASSTHROUGH_MIME = new Set(['video/mp4', 'video/webm']);
+
 export function isConvertibleVideo(file) {
   if (!file) return false;
   const mime = String(file.mimetype || '').toLowerCase();
   if (mime.startsWith('video/') || CONVERTIBLE_MIME.has(mime)) return true;
   const ext = path.extname(file.originalname || '').toLowerCase();
   return CONVERTIBLE_EXT.has(ext);
+}
+
+function shouldPassthrough(file) {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const mime = String(file.mimetype || '').toLowerCase();
+  return PASSTHROUGH_EXT.has(ext) || PASSTHROUGH_MIME.has(mime);
 }
 
 function webmFileName(originalName) {
@@ -77,10 +87,11 @@ function runFfmpeg(args) {
 async function extractThumbnail(inputPath, originalName) {
   const thumbPath = path.join(path.dirname(inputPath), `${randomUUID()}.jpg`);
   try {
+    // -ss before -i is much faster (keyframe seek).
     await runFfmpeg([
       '-y',
       '-ss',
-      '0.25',
+      '0.5',
       '-i',
       inputPath,
       '-frames:v',
@@ -88,7 +99,7 @@ async function extractThumbnail(inputPath, originalName) {
       '-vf',
       'scale=640:-2',
       '-q:v',
-      '4',
+      '5',
       thumbPath,
     ]);
     const buffer = await fs.readFile(thumbPath);
@@ -109,8 +120,9 @@ async function extractThumbnail(inputPath, originalName) {
 }
 
 /**
- * Convert uploaded video to WebM (VP9 + Opus) and extract a JPEG thumbnail.
- * Already-WebM files pass through (still get a thumbnail). Non-videos pass through.
+ * Prepare video for storage:
+ * - MP4 / WebM: passthrough (fast) + thumbnail
+ * - Other formats: fast VP8 WebM re-encode + thumbnail
  *
  * @param {{ buffer: Buffer; originalname: string; mimetype: string; size: number }} file
  */
@@ -128,9 +140,6 @@ export async function maybeConvertVideoToWebm(file) {
   }
 
   const ext = path.extname(file.originalname || '').toLowerCase();
-  const mime = String(file.mimetype || '').toLowerCase();
-  const alreadyWebm = ext === '.webm' || mime === 'video/webm';
-
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ar-video-'));
   const inputPath = path.join(tmpRoot, `in${ext || '.mp4'}`);
   const outputPath = path.join(tmpRoot, `${randomUUID()}.webm`);
@@ -139,38 +148,41 @@ export async function maybeConvertVideoToWebm(file) {
     await fs.writeFile(inputPath, file.buffer);
     const thumbnail = await extractThumbnail(inputPath, file.originalname);
 
-    if (alreadyWebm) {
+    // Fast path: keep browser-native MP4/WebM without re-encoding.
+    if (shouldPassthrough(file)) {
+      const mime =
+        ext === '.webm' || String(file.mimetype || '').includes('webm')
+          ? 'video/webm'
+          : 'video/mp4';
       return {
         buffer: file.buffer,
-        originalname: webmFileName(file.originalname),
-        mimetype: 'video/webm',
+        originalname: file.originalname,
+        mimetype: mime,
         size: file.size,
         converted: false,
         thumbnail,
       };
     }
 
-    // VP9 + Opus: solid browser support, smaller than typical source uploads.
+    // Fast WebM (VP8) for formats that need conversion — realtime deadline.
     await runFfmpeg([
       '-y',
       '-i',
       inputPath,
+      '-vf',
+      "scale='min(1280,iw)':-2",
       '-c:v',
-      'libvpx-vp9',
-      '-crf',
-      '36',
+      'libvpx',
       '-b:v',
-      '0',
-      '-row-mt',
-      '1',
+      '1.2M',
       '-deadline',
-      'good',
+      'realtime',
       '-cpu-used',
-      '4',
+      '8',
       '-c:a',
-      'libopus',
-      '-b:a',
-      '96k',
+      'libvorbis',
+      '-q:a',
+      '4',
       '-ac',
       '2',
       outputPath,
@@ -191,9 +203,9 @@ export async function maybeConvertVideoToWebm(file) {
     };
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error('[video] WebM conversion failed', err?.message || err);
+    console.error('[video] processing failed', err?.message || err);
     throw new AppError(
-      'Could not convert video to WebM. Try a shorter clip or a different format (MP4/MOV).',
+      'Could not process video. Try an MP4 file or a shorter clip.',
       400,
     );
   } finally {
