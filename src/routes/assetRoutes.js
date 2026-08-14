@@ -7,6 +7,7 @@ import {
   listAssetsHandler,
   getAssetHandler,
   serveAssetFile,
+  serveAssetThumbnail,
   deleteAssetHandler,
   removeAssetLocationHandler,
 } from '../controllers/assetController.js';
@@ -72,6 +73,7 @@ router.post('/', roleMiddleware(['admin']), assetUpload.single('file'), uploadAs
 router.get('/', roleMiddleware(['admin', 'partner']), listAssetsHandler);
 router.get('/:id', roleMiddleware(['admin', 'partner']), getAssetHandler);
 router.get('/:id/file', roleMiddleware(['admin', 'partner']), serveAssetFile);
+router.get('/:id/thumbnail', roleMiddleware(['admin', 'partner']), serveAssetThumbnail);
 router.delete('/:id/locations/:locationId', roleMiddleware(['admin']), removeAssetLocationHandler);
 router.delete('/:id', roleMiddleware(['admin']), deleteAssetHandler);
 

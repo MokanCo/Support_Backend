@@ -86,36 +86,55 @@ function runFfmpeg(args) {
  */
 async function extractThumbnail(inputPath, originalName) {
   const thumbPath = path.join(path.dirname(inputPath), `${randomUUID()}.jpg`);
+  const attempts = [
+    // Fast keyframe seek
+    ['-y', '-ss', '0.5', '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', thumbPath],
+    // Accurate decode fallback (some files have no early keyframe)
+    ['-y', '-i', inputPath, '-ss', '1', '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', thumbPath],
+    ['-y', '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', thumbPath],
+  ];
+
   try {
-    // -ss before -i is much faster (keyframe seek).
-    await runFfmpeg([
-      '-y',
-      '-ss',
-      '0.5',
-      '-i',
-      inputPath,
-      '-frames:v',
-      '1',
-      '-vf',
-      'scale=640:-2',
-      '-q:v',
-      '5',
-      thumbPath,
-    ]);
-    const buffer = await fs.readFile(thumbPath);
-    if (!buffer.length) return null;
-    return {
-      buffer,
-      originalname: thumbFileName(originalName),
-      mimetype: 'image/jpeg',
-      size: buffer.length,
-    };
+    for (const args of attempts) {
+      try {
+        await runFfmpeg(args);
+        const buffer = await fs.readFile(thumbPath);
+        if (buffer.length) {
+          return {
+            buffer,
+            originalname: thumbFileName(originalName),
+            mimetype: 'image/jpeg',
+            size: buffer.length,
+          };
+        }
+      } catch {
+        /* try next */
+      }
+    }
+    return null;
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[video] thumbnail extraction failed', err?.message || err);
     return null;
   } finally {
     await fs.unlink(thumbPath).catch(() => {});
+  }
+}
+
+/**
+ * Extract a thumbnail from an in-memory video buffer (used for on-demand
+ * generation when an older asset has no thumbnailUrl in production).
+ */
+export async function extractThumbnailFromVideoBuffer(videoBuffer, originalName = 'video.mp4') {
+  if (!videoBuffer?.length) return null;
+  const ext = path.extname(originalName || '').toLowerCase() || '.mp4';
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ar-thumb-'));
+  const inputPath = path.join(tmpRoot, `in${ext}`);
+  try {
+    await fs.writeFile(inputPath, videoBuffer);
+    return await extractThumbnail(inputPath, originalName);
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
   }
 }
 

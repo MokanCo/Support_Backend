@@ -7,6 +7,7 @@ import {
   makeCategoryGetHandler,
   makeCategoryDeleteHandler,
   serveAssetFile,
+  serveAssetThumbnail,
   removeAssetLocationHandler,
 } from '../controllers/assetController.js';
 import { assetUpload } from '../middleware/assetUpload.js';
@@ -114,6 +115,7 @@ router.post(
 );
 router.get('/:id', roleMiddleware(['admin', 'partner']), makeCategoryGetHandler('marketing_assets'));
 router.get('/:id/file', roleMiddleware(['admin', 'partner']), serveAssetFile);
+router.get('/:id/thumbnail', roleMiddleware(['admin', 'partner']), serveAssetThumbnail);
 router.delete(
   '/:id/locations/:locationId',
   roleMiddleware(['admin']),
