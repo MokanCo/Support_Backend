@@ -8,7 +8,10 @@ import {
   uploadFile as uploadToR2,
 } from './cloudflareR2StorageService.js';
 import { maybeConvertImageToWebp } from './imageOptimizeService.js';
-import { maybeConvertVideoToWebm } from './videoOptimizeService.js';
+import {
+  maybeConvertVideoToWebm,
+  extractThumbnailFromVideoBuffer,
+} from './videoOptimizeService.js';
 
 export const ASSET_UPLOAD_ROOT = path.join(process.cwd(), 'uploads', 'assets');
 
@@ -81,7 +84,9 @@ function formatAsset(doc) {
     originalName: originalFileName,
     // Hide direct storage URLs for videos (inspect / Network JSON).
     fileUrl: isVideoMime(mimeType) ? '' : d.fileUrl || '',
-    thumbnailUrl: d.thumbnailUrl || '',
+    // Never expose CDN thumbnail URLs either — cards load via /:id/thumbnail.
+    hasThumbnail: Boolean(d.thumbnailUrl || d.thumbnailStorageKey) || isVideoMime(mimeType),
+    thumbnailUrl: '',
     contentType: mimeType,
     mimeType,
     fileSize: d.size,
@@ -320,6 +325,98 @@ export async function getAssetFilePath(id, { role, locationId }) {
     redirect: false,
     storedName: doc.storedName,
   };
+}
+
+/**
+ * Resolve video thumbnail bytes for the card preview.
+ * Proxies R2 (no browser→CDN dependency) and generates+persists a thumbnail
+ * when older production assets are missing one.
+ */
+export async function getAssetThumbnailBuffer(id, { role, locationId }) {
+  const doc = await loadAccessibleAssetDoc(id, { role, locationId });
+  if (!String(doc.mimeType || '').startsWith('video/')) {
+    throw new AppError('Thumbnails are only available for videos', 400);
+  }
+
+  async function loadFromUrl(url) {
+    const upstream = await fetch(url);
+    if (!upstream.ok) return null;
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    return buffer.length ? buffer : null;
+  }
+
+  if (doc.thumbnailUrl) {
+    const existing = await loadFromUrl(doc.thumbnailUrl);
+    if (existing) {
+      return { buffer: existing, mimeType: 'image/jpeg' };
+    }
+  }
+
+  if (doc.thumbnailStorageKey) {
+    const localPath = path.join(ASSET_UPLOAD_ROOT, doc.thumbnailStorageKey);
+    if (fs.existsSync(localPath)) {
+      const buffer = await fs.promises.readFile(localPath);
+      if (buffer.length) return { buffer, mimeType: 'image/jpeg' };
+    }
+  }
+
+  // On-demand generate from the video (fixes older uploads / failed ffmpeg on deploy).
+  let videoBuffer = null;
+  if (doc.fileUrl) {
+    videoBuffer = await loadFromUrl(doc.fileUrl);
+  } else if (doc.storedName) {
+    const filePath = path.join(ASSET_UPLOAD_ROOT, doc.storedName);
+    if (fs.existsSync(filePath)) {
+      videoBuffer = await fs.promises.readFile(filePath);
+    }
+  }
+  if (!videoBuffer?.length) {
+    throw new AppError('Video file not found for thumbnail', 404);
+  }
+
+  const thumb = await extractThumbnailFromVideoBuffer(
+    videoBuffer,
+    doc.originalName || 'video.mp4',
+  );
+  if (!thumb?.buffer?.length) {
+    throw new AppError('Could not generate video thumbnail', 404);
+  }
+
+  // Persist so the next request is cheap.
+  try {
+    if (isR2Configured(doc.category)) {
+      const uploaded = await uploadToR2(
+        {
+          buffer: thumb.buffer,
+          originalname: thumb.originalname,
+          mimetype: thumb.mimetype,
+          size: thumb.size,
+        },
+        {
+          category: doc.category,
+          folder: `${doc.category === 'marketing_assets' ? 'marketing-assets' : 'documents'}/thumbnails`,
+        },
+      );
+      doc.thumbnailUrl = uploaded.fileUrl;
+      doc.thumbnailStorageKey = uploaded.key;
+      await doc.save();
+    } else {
+      const local = await storeFileLocally({
+        buffer: thumb.buffer,
+        originalname: thumb.originalname,
+        mimetype: thumb.mimetype,
+        size: thumb.size,
+      });
+      doc.thumbnailStorageKey = local.storedName;
+      doc.thumbnailUrl = '';
+      await doc.save();
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[assets] could not persist generated thumbnail', err?.message || err);
+  }
+
+  return { buffer: thumb.buffer, mimeType: 'image/jpeg' };
 }
 
 /** Soft-delete. Does not remove the object from R2. */

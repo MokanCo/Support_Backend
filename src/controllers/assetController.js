@@ -4,6 +4,7 @@ import {
   listAssets,
   getAssetById,
   getAssetFilePath,
+  getAssetThumbnailBuffer,
   removeAsset,
   removeAssetLocation,
 } from '../services/assetService.js';
@@ -133,6 +134,17 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
   res.setHeader('Content-Disposition', contentDisposition);
   fs.createReadStream(fileInfo.filePath).pipe(res);
+});
+
+export const serveAssetThumbnail = asyncHandler(async (req, res) => {
+  const { buffer, mimeType } = await getAssetThumbnailBuffer(
+    req.params.id,
+    actorFromReq(req),
+  );
+  res.setHeader('Content-Type', mimeType || 'image/jpeg');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.send(buffer);
 });
 
 export const deleteAssetHandler = asyncHandler(async (req, res) => {
