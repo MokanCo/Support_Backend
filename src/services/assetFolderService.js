@@ -206,6 +206,12 @@ export async function moveFolder(actor, id, { parentId = null, category }) {
  * - force=false: reject if it has subfolders or assets
  * - force=true: soft-delete the folder tree AND all files inside it
  */
+function folderIdQuery(folderIds) {
+  const oids = folderIds.filter(Boolean);
+  const strings = oids.map((id) => String(id));
+  return { $in: [...oids, ...strings] };
+}
+
 export async function deleteFolder(actor, id, { category, force = false }) {
   if (actor?.role !== 'admin') throw new AppError('Only admin can manage folders', 403);
   assertCategory(category);
@@ -213,6 +219,7 @@ export async function deleteFolder(actor, id, { category, force = false }) {
   const doc = await loadFolder(toObjectId(id, 'folderId'), category);
   const descendantIds = await collectDescendantIds(doc._id, category);
   const folderIds = [doc._id, ...descendantIds];
+  const inFolders = folderIdQuery(folderIds);
 
   const [subfolderCount, assetCount] = await Promise.all([
     AssetFolder.countDocuments({
@@ -222,7 +229,7 @@ export async function deleteFolder(actor, id, { category, force = false }) {
     }),
     Asset.countDocuments({
       category,
-      folderId: { $in: folderIds },
+      folderId: inFolders,
       isDeleted: { $ne: true },
     }),
   ]);
@@ -238,14 +245,10 @@ export async function deleteFolder(actor, id, { category, force = false }) {
     throw err;
   }
 
-  let deletedAssets = 0;
-  if (assetCount > 0) {
-    const result = await Asset.updateMany(
-      { category, folderId: { $in: folderIds }, isDeleted: { $ne: true } },
-      { $set: { isDeleted: true } },
-    );
-    deletedAssets = result.modifiedCount;
-  }
+  const deletedAssets = await Asset.updateMany(
+    { category, folderId: inFolders, isDeleted: { $ne: true } },
+    { $set: { isDeleted: true } },
+  );
 
   await AssetFolder.updateMany(
     { _id: { $in: folderIds } },
@@ -254,7 +257,7 @@ export async function deleteFolder(actor, id, { category, force = false }) {
 
   return {
     ok: true,
-    deletedAssets,
+    deletedAssets: deletedAssets.modifiedCount,
     deletedFolders: folderIds.length,
   };
 }

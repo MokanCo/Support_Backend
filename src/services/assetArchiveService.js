@@ -1,10 +1,15 @@
 import path from 'path';
-import archiver from 'archiver';
+import archiverModule from 'archiver';
 import Asset from '../models/Asset.js';
 import AssetFolder from '../models/AssetFolder.js';
 import { AppError } from '../utils/AppError.js';
 import { collectDescendantIds, toObjectId } from './assetFolderService.js';
 import { readAssetBytes } from './assetService.js';
+
+const archiver =
+  typeof archiverModule === 'function'
+    ? archiverModule
+    : archiverModule?.default;
 
 function sanitizeZipName(name) {
   const cleaned = String(name || 'file')
@@ -92,10 +97,11 @@ export async function listFolderArchiveEntries(actor, folderId, category) {
   const descendantIds = await collectDescendantIds(folder._id, category);
   const folderIds = [folder._id, ...descendantIds];
   const pathByFolder = await folderRelativePaths(folder, descendantIds);
+  const idValues = [...folderIds, ...folderIds.map((id) => String(id))];
 
   const docs = await Asset.find({
     category,
-    folderId: { $in: folderIds },
+    folderId: { $in: idValues },
     isDeleted: { $ne: true },
     ...actorFilter(actor),
   }).lean();
@@ -144,33 +150,54 @@ export async function listAssetArchiveEntries(actor, { category, assetIds }) {
 }
 
 export async function streamArchive(res, { zipName, entries }) {
+  if (!archiver) {
+    throw new AppError('Zip library is not available on the server', 500);
+  }
   if (!entries.length) {
-    throw new AppError('No downloadable files in this selection', 404);
+    throw new AppError('This folder has no files to download', 404);
   }
 
-  const encoded = encodeURIComponent(zipName);
+  const files = [];
+  for (const entry of entries) {
+    try {
+      const bytes = await readAssetBytes(entry.doc);
+      if (bytes?.buffer?.length) {
+        files.push({ name: entry.zipPath, buffer: bytes.buffer });
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[zip] skip file', entry.zipPath, err?.message || err);
+    }
+  }
+
+  if (!files.length) {
+    throw new AppError(
+      'Could not read the files in this folder. They may not be stored in Cloudflare R2 yet.',
+      404,
+    );
+  }
+
+  const safeName = String(zipName || 'folder.zip').replace(/["\r\n]/g, '');
+  const encoded = encodeURIComponent(safeName);
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`,
+    `attachment; filename="${safeName}"; filename*=UTF-8''${encoded}`,
   );
   res.setHeader('Cache-Control', 'private, no-store');
 
   const archive = archiver('zip', { zlib: { level: 5 } });
-  archive.on('error', (err) => {
-    if (!res.headersSent) {
-      res.status(500).json({ message: err.message || 'Zip failed' });
-      return;
-    }
-    res.destroy(err);
+  const done = new Promise((resolve, reject) => {
+    archive.on('error', reject);
+    archive.on('end', resolve);
+    res.on('error', reject);
   });
   archive.pipe(res);
 
-  for (const entry of entries) {
-    const bytes = await readAssetBytes(entry.doc);
-    if (!bytes?.buffer?.length) continue;
-    archive.append(bytes.buffer, { name: entry.zipPath });
+  for (const file of files) {
+    archive.append(file.buffer, { name: file.name });
   }
 
   await archive.finalize();
+  await done;
 }
