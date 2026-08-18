@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
 import { AppError } from '../utils/AppError.js';
 
-function send(res, status, message) {
-  return res.status(status).json({ success: false, error: message, message });
+function send(res, status, message, extra = {}) {
+  return res.status(status).json({ success: false, error: message, message, ...extra });
 }
 
 /**
@@ -18,7 +18,11 @@ export function errorHandler(err, req, res, next) {
   }
 
   if (err instanceof AppError) {
-    return send(res, err.statusCode, err.message);
+    const extra = {};
+    if (err.code) extra.code = err.code;
+    if (err.assetCount != null) extra.assetCount = err.assetCount;
+    if (err.subfolderCount != null) extra.subfolderCount = err.subfolderCount;
+    return send(res, err.statusCode, err.message, extra);
   }
 
   // Multer upload errors (file size, unexpected field, etc.)

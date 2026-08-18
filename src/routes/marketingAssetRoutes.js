@@ -35,6 +35,7 @@ router.post('/folders/ensure-path', roleMiddleware(['admin']), folders.ensurePat
 router.get('/folders/:id', roleMiddleware(['admin', 'partner']), folders.get);
 router.get('/folders/:id/path', roleMiddleware(['admin', 'partner']), folders.path);
 router.get('/folders/:id/download', roleMiddleware(['admin', 'partner']), folders.download);
+router.post('/folders/:id/download', roleMiddleware(['admin', 'partner']), folders.download);
 router.patch('/folders/:id', roleMiddleware(['admin']), folders.rename);
 router.post('/folders/:id/move', roleMiddleware(['admin']), folders.move);
 router.delete('/folders/:id', roleMiddleware(['admin']), folders.remove);
