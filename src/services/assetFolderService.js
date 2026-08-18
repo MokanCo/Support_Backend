@@ -5,7 +5,7 @@ import { AppError } from '../utils/AppError.js';
 
 const CATEGORIES = new Set(['documents', 'marketing_assets']);
 
-function formatFolder(doc) {
+function formatFolder(doc, extra = {}) {
   const d = doc && typeof doc.toObject === 'function' ? doc.toObject() : doc;
   return {
     id: String(d._id),
@@ -15,6 +15,7 @@ function formatFolder(doc) {
     createdBy: d.createdBy ? String(d.createdBy) : null,
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
+    containsVideo: Boolean(extra.containsVideo),
   };
 }
 
@@ -117,7 +118,33 @@ export async function listFolders(actor, { category, parentId = null, allFolders
   }
 
   const rows = await AssetFolder.find(filter).sort({ name: 1 }).lean();
-  return { folders: rows.map(formatFolder) };
+
+  const videoFolderRoots = new Set();
+  if (rows.length) {
+    const ownerById = new Map();
+    for (const row of rows) {
+      ownerById.set(String(row._id), String(row._id));
+      const descendants = await collectDescendantIds(row._id, category);
+      for (const id of descendants) ownerById.set(String(id), String(row._id));
+    }
+    const scopedIds = [...ownerById.keys()];
+    const videoFolderIds = await Asset.distinct('folderId', {
+      category,
+      folderId: { $in: scopedIds },
+      isDeleted: { $ne: true },
+      mimeType: { $regex: /^video\//i },
+    });
+    for (const fid of videoFolderIds) {
+      const root = ownerById.get(String(fid));
+      if (root) videoFolderRoots.add(root);
+    }
+  }
+
+  return {
+    folders: rows.map((row) =>
+      formatFolder(row, { containsVideo: videoFolderRoots.has(String(row._id)) }),
+    ),
+  };
 }
 
 export async function getFolder(actor, id, category) {

@@ -13,7 +13,7 @@ import {
 import {
   listFolderArchiveEntries,
   listAssetArchiveEntries,
-  streamArchive,
+  formatArchiveManifest,
 } from '../services/assetArchiveService.js';
 import { getObjectBuffer as getR2ObjectBuffer } from '../services/cloudflareR2StorageService.js';
 import * as folderService from '../services/assetFolderService.js';
@@ -342,7 +342,10 @@ export function makeFolderHandlers(category) {
     }),
     download: asyncHandler(async (req, res) => {
       const pack = await listFolderArchiveEntries(actorWithId(req), req.params.id, category);
-      await streamArchive(res, pack);
+      if (!pack.entries.length) {
+        throw new AppError('This folder has no files to download', 404);
+      }
+      res.json(formatArchiveManifest(pack));
     }),
   };
 }
@@ -374,6 +377,9 @@ export function makeBulkDownloadAssetsHandler(category) {
       category,
       assetIds: req.body.assetIds || [],
     });
-    await streamArchive(res, pack);
+    if (!pack.entries.length) {
+      throw new AppError('No downloadable files in this selection', 404);
+    }
+    res.json(formatArchiveManifest(pack));
   });
 }

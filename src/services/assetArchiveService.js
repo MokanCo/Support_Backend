@@ -1,13 +1,8 @@
 import path from 'path';
-import { createRequire } from 'module';
 import Asset from '../models/Asset.js';
 import AssetFolder from '../models/AssetFolder.js';
 import { AppError } from '../utils/AppError.js';
 import { collectDescendantIds, toObjectId } from './assetFolderService.js';
-import { readAssetBytes } from './assetService.js';
-
-const require = createRequire(import.meta.url);
-const archiver = require('archiver');
 
 function sanitizeZipName(name) {
   const cleaned = String(name || 'file')
@@ -104,6 +99,21 @@ export async function listFolderArchiveEntries(actor, folderId, category) {
     ...actorFilter(actor),
   }).lean();
 
+  if (actor?.role !== 'admin') {
+    const hasVideo = await Asset.exists({
+      category,
+      folderId: { $in: idValues },
+      isDeleted: { $ne: true },
+      mimeType: { $regex: /^video\//i },
+    });
+    if (hasVideo) {
+      throw new AppError(
+        'This folder contains video files. Partners can download individual non-video files, but cannot download the whole folder.',
+        403,
+      );
+    }
+  }
+
   const used = new Set();
   const entries = [];
   for (const doc of docs) {
@@ -147,55 +157,13 @@ export async function listAssetArchiveEntries(actor, { category, assetIds }) {
   };
 }
 
-export async function streamArchive(res, { zipName, entries }) {
-  if (!archiver) {
-    throw new AppError('Zip library is not available on the server', 500);
-  }
-  if (!entries.length) {
-    throw new AppError('This folder has no files to download', 404);
-  }
-
-  const files = [];
-  for (const entry of entries) {
-    try {
-      const bytes = await readAssetBytes(entry.doc);
-      if (bytes?.buffer?.length) {
-        files.push({ name: entry.zipPath, buffer: bytes.buffer });
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[zip] skip file', entry.zipPath, err?.message || err);
-    }
-  }
-
-  if (!files.length) {
-    throw new AppError(
-      'Could not read the files in this folder. They may not be stored in Cloudflare R2 yet.',
-      404,
-    );
-  }
-
-  const safeName = String(zipName || 'folder.zip').replace(/["\r\n]/g, '');
-  const encoded = encodeURIComponent(safeName);
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="${safeName}"; filename*=UTF-8''${encoded}`,
-  );
-  res.setHeader('Cache-Control', 'private, no-store');
-
-  const archive = archiver('zip', { zlib: { level: 5 } });
-  const done = new Promise((resolve, reject) => {
-    archive.on('error', reject);
-    archive.on('end', resolve);
-    res.on('error', reject);
-  });
-  archive.pipe(res);
-
-  for (const file of files) {
-    archive.append(file.buffer, { name: file.name });
-  }
-
-  await archive.finalize();
-  await done;
+export function formatArchiveManifest({ zipName, entries }) {
+  return {
+    zipName,
+    files: entries.map((entry) => ({
+      id: String(entry.doc._id),
+      name: entry.doc.originalName || entry.doc.name || 'file',
+      zipPath: entry.zipPath,
+    })),
+  };
 }
