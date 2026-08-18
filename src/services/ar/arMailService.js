@@ -65,7 +65,7 @@ export async function sendInvoiceEmail({ invoice, location, profile, kind = 'sen
     textLines.push(
       'You can securely view your invoice and payment instructions by opening the link below.',
       '',
-      'Payment is available through Zelle from the secure invoice page.',
+      'View available payment options — Zelle or card — from the secure invoice page.',
       '',
       `PAY NOW: ${payLink}`,
       '',
@@ -87,7 +87,7 @@ export async function sendInvoiceEmail({ invoice, location, profile, kind = 'sen
       </tr>
       <tr>
         <td align="center" style="padding:0 0 16px;color:#94a3b8;font-size:12px;">
-          Payment is available through Zelle from the secure invoice page.
+          View available payment options — Zelle or card — from the secure invoice page.
         </td>
       </tr>`
     : '';

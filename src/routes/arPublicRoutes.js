@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import * as publicInvoice from '../services/ar/arPublicInvoiceService.js';
+import { createPublicCheckoutSession } from '../services/ar/arStripeService.js';
 
 const router = Router();
 
@@ -14,6 +15,10 @@ const proofUpload = multer({
  * Public invoice payment APIs — no auth.
  * GET  /api/public/invoices/:token
  * POST /api/public/invoices/:token/payment-submissions
+ * POST /api/public/invoices/:token/stripe-checkout-session
+ *
+ * The Stripe webhook itself is mounted separately in app.js, ahead of the
+ * JSON body parser, since Stripe's signature check needs the raw body.
  */
 
 router.get(
@@ -32,6 +37,13 @@ router.post(
     res
       .status(201)
       .json(await publicInvoice.submitPublicPayment(req.params.token, body, req.file || null));
+  }),
+);
+
+router.post(
+  '/invoices/:token/stripe-checkout-session',
+  asyncHandler(async (req, res) => {
+    res.json(await createPublicCheckoutSession(req.params.token));
   }),
 );
 

@@ -16,6 +16,7 @@ import documentRoutes from './routes/documentRoutes.js';
 import marketingAssetRoutes from './routes/marketingAssetRoutes.js';
 import arRoutes from './routes/arRoutes.js';
 import arPublicRoutes from './routes/arPublicRoutes.js';
+import { handleStripeWebhookEvent } from './services/ar/arStripeService.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { mountSwagger } from './config/swagger.js';
 import { getMailConfigStatus, verifyMailConnection } from './services/mailSender.js';
@@ -36,6 +37,18 @@ app.use(
     allowedHeaders: ['Content-Type', 'Authorization'],
   }),
 );
+
+// Stripe requires the raw request body to verify its webhook signature, so
+// this route is mounted ahead of express.json() and parses its own body.
+app.post(
+  '/api/public/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  asyncHandler(async (req, res) => {
+    await handleStripeWebhookEvent(req.body, req.headers['stripe-signature']);
+    res.json({ received: true });
+  }),
+);
+
 app.use(express.json({ limit: '1mb' }));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 

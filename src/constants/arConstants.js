@@ -30,6 +30,7 @@ export const AR_PAYMENT_METHODS = [
   'card',
   'wire',
   'cash',
+  'stripe',
   'other',
 ];
 

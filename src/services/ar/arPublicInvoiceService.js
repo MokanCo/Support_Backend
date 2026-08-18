@@ -52,7 +52,7 @@ export function publicInvoicePayUrl(token) {
   return `${base}${publicInvoicePayPath(token)}`;
 }
 
-async function loadInvoiceByToken(token) {
+export async function loadInvoiceByToken(token) {
   const raw = String(token || '').trim();
   if (!raw || raw.length < 32) throw new AppError('Invalid payment link', 404);
   const doc = await ArInvoice.findOne({
@@ -72,6 +72,12 @@ async function loadInvoiceByToken(token) {
 function publicZelleMethod(settings) {
   return (settings.paymentMethods || []).find(
     (m) => m.type === 'zelle' && m.enabled !== false,
+  ) || null;
+}
+
+function publicStripeMethod(settings) {
+  return (settings.paymentMethods || []).find(
+    (m) => m.type === 'stripe' && m.enabled !== false,
   ) || null;
 }
 
@@ -107,6 +113,7 @@ export async function getPublicInvoiceByToken(token) {
   }
 
   const zelle = publicZelleMethod(settings);
+  const stripe = publicStripeMethod(settings);
   const balanceDue = money(doc.balanceDue);
   const isPaid = balanceDue <= 0 || doc.status === 'paid';
 
@@ -182,6 +189,13 @@ export async function getPublicInvoiceByToken(token) {
             'Please pay via Zelle using the instructions on this page.',
         }
       : { enabled: false },
+    // Stripe's secret key never leaves the server — only whether the admin
+    // has enabled it is exposed; the actual checkout session is created
+    // server-side via /stripe-checkout-session.
+    stripe:
+      stripe && process.env.STRIPE_SECRET_KEY
+        ? { enabled: true, label: stripe.label || 'Credit / Debit Card' }
+        : { enabled: false },
   };
 }
 
