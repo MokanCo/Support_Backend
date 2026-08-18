@@ -56,6 +56,13 @@ const assetSchema = new mongoose.Schema(
       enum: ['postcard', 'banner', 'logo', 'video', 'other'],
       required: false,
     },
+    /** Logical Drive folder; null = root. Does not change R2 storageKey. */
+    folderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AssetFolder',
+      default: null,
+      index: true,
+    },
     uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     isDeleted: { type: Boolean, default: false, index: true },
     expiresAt: {
@@ -71,6 +78,7 @@ const assetSchema = new mongoose.Schema(
 );
 
 assetSchema.index({ category: 1, isDeleted: 1, createdAt: -1 });
+assetSchema.index({ category: 1, folderId: 1, isDeleted: 1 });
 
 const Asset = mongoose.model('Asset', assetSchema);
 export default Asset;

@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import Asset from '../models/Asset.js';
+import AssetFolder from '../models/AssetFolder.js';
 import { AppError } from '../utils/AppError.js';
 import {
   isR2Configured,
@@ -12,6 +14,7 @@ import {
   maybeConvertVideoToWebm,
   extractThumbnailFromVideoBuffer,
 } from './videoOptimizeService.js';
+import { toObjectId as folderToObjectId } from './assetFolderService.js';
 
 export const ASSET_UPLOAD_ROOT = path.join(process.cwd(), 'uploads', 'assets');
 
@@ -95,6 +98,7 @@ function formatAsset(doc) {
     visibility: d.visibility,
     locationIds: (d.locationIds || []).map(String),
     type: d.type,
+    folderId: d.folderId ? String(d.folderId) : null,
     uploadedBy: String(d.uploadedBy),
     expiresAt: d.expiresAt,
     createdAt: d.createdAt,
@@ -216,6 +220,7 @@ export async function createAsset({
   type,
   name,
   userId,
+  folderId = null,
 }) {
   if (!['documents', 'marketing_assets'].includes(category)) {
     throw new AppError('category must be documents or marketing_assets', 400);
@@ -225,6 +230,17 @@ export async function createAsset({
   }
   if (visibility === 'location' && !(locationIds || []).length) {
     throw new AppError('At least one location is required for location visibility', 400);
+  }
+
+  let folderOid = null;
+  if (folderId) {
+    folderOid = folderToObjectId(folderId, 'folderId');
+    const folder = await AssetFolder.findOne({
+      _id: folderOid,
+      category,
+      isDeleted: { $ne: true },
+    });
+    if (!folder) throw new AppError('Folder not found', 404);
   }
 
   const stored = await persistUpload(file, category);
@@ -246,6 +262,7 @@ export async function createAsset({
     visibility,
     locationIds: visibility === 'location' ? locationIds || [] : [],
     type: category === 'marketing_assets' ? type : undefined,
+    folderId: folderOid,
     uploadedBy: userId,
     isDeleted: false,
   });
@@ -262,7 +279,7 @@ function accessFilter({ role, locationId }) {
   return { $or: orClauses };
 }
 
-export async function listAssets({ role, locationId, category }) {
+export async function listAssets({ role, locationId, category, folderId, allFolders = false }) {
   if (!['documents', 'marketing_assets'].includes(category)) {
     throw new AppError('category must be documents or marketing_assets', 400);
   }
@@ -271,8 +288,63 @@ export async function listAssets({ role, locationId, category }) {
     isDeleted: { $ne: true },
     ...accessFilter({ role, locationId }),
   };
+
+  // Default: only assets in the requested folder (null = root).
+  // allFolders=true keeps legacy "flat list of everything" for search.
+  if (!allFolders) {
+    if (folderId) {
+      const oid = folderToObjectId(folderId, 'folderId');
+      const folder = await AssetFolder.findOne({
+        _id: oid,
+        category,
+        isDeleted: { $ne: true },
+      });
+      if (!folder) throw new AppError('Folder not found', 404);
+      filter.folderId = oid;
+    } else {
+      filter.$and = [...(filter.$and || []), { $or: [{ folderId: null }, { folderId: { $exists: false } }] }];
+    }
+  }
+
   const docs = await Asset.find(filter).sort({ createdAt: -1 }).lean();
   return { assets: docs.map(formatAsset) };
+}
+
+/**
+ * Move one or more assets into a folder (or root). Does not touch R2 keys.
+ */
+export async function moveAssets(actor, { category, assetIds, folderId = null }) {
+  if (actor?.role !== 'admin') throw new AppError('Only admin can move assets', 403);
+  if (!['documents', 'marketing_assets'].includes(category)) {
+    throw new AppError('category must be documents or marketing_assets', 400);
+  }
+  const ids = (assetIds || []).map((id) => {
+    if (!mongoose.Types.ObjectId.isValid(id)) throw new AppError('Invalid asset id', 400);
+    return id;
+  });
+  if (!ids.length) throw new AppError('No assets selected', 400);
+
+  let folderOid = null;
+  if (folderId) {
+    folderOid = folderToObjectId(folderId, 'folderId');
+    const folder = await AssetFolder.findOne({
+      _id: folderOid,
+      category,
+      isDeleted: { $ne: true },
+    });
+    if (!folder) throw new AppError('Folder not found', 404);
+  }
+
+  const result = await Asset.updateMany(
+    { _id: { $in: ids }, category, isDeleted: { $ne: true } },
+    { $set: { folderId: folderOid } },
+  );
+
+  const docs = await Asset.find({ _id: { $in: ids }, category, isDeleted: { $ne: true } }).lean();
+  return {
+    moved: result.modifiedCount,
+    assets: docs.map(formatAsset),
+  };
 }
 
 async function loadAccessibleAssetDoc(id, { role, locationId }) {

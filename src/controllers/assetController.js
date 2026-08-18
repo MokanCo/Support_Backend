@@ -7,7 +7,9 @@ import {
   getAssetThumbnailBuffer,
   removeAsset,
   removeAssetLocation,
+  moveAssets,
 } from '../services/assetService.js';
+import * as folderService from '../services/assetFolderService.js';
 import { AppError } from '../utils/AppError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
@@ -50,6 +52,7 @@ export const uploadAsset = asyncHandler(async (req, res) => {
     type,
     name,
     Name,
+    folderId,
   } = req.body;
 
   if (!['documents', 'marketing_assets'].includes(category)) {
@@ -64,16 +67,19 @@ export const uploadAsset = asyncHandler(async (req, res) => {
     type,
     name: name || Name,
     userId: req.user.id,
+    folderId: folderId || null,
   });
 
   res.status(201).json(result);
 });
 
 export const listAssetsHandler = asyncHandler(async (req, res) => {
-  const { category } = req.query;
+  const { category, folderId, allFolders } = req.query;
   const result = await listAssets({
     ...actorFromReq(req),
     category,
+    folderId: folderId || null,
+    allFolders: allFolders === '1' || allFolders === 'true',
   });
   res.json(result);
 });
@@ -168,6 +174,7 @@ export function makeCategoryUploadHandler(category) {
       type,
       name,
       Name,
+      folderId,
     } = req.body;
 
     const result = await createAsset({
@@ -178,6 +185,7 @@ export function makeCategoryUploadHandler(category) {
       type,
       name: name || Name,
       userId: req.user.id,
+      folderId: folderId || null,
     });
 
     // Match Document-oriented response shape for dedicated routes
@@ -191,9 +199,12 @@ export function makeCategoryUploadHandler(category) {
 
 export function makeCategoryListHandler(category) {
   return asyncHandler(async (req, res) => {
+    const { folderId, allFolders } = req.query;
     const result = await listAssets({
       ...actorFromReq(req),
       category,
+      folderId: folderId || null,
+      allFolders: allFolders === '1' || allFolders === 'true',
     });
     if (category === 'documents') {
       res.json({ documents: result.assets });
@@ -227,6 +238,97 @@ export function makeCategoryDeleteHandler(category) {
       throw new AppError('Not found', 404);
     }
     const result = await removeAsset(req.params.id);
+    res.json(result);
+  });
+}
+
+function actorWithId(req) {
+  return { ...actorFromReq(req), id: req.user.id };
+}
+
+/** Folder + move handlers bound to a fixed category. */
+export function makeFolderHandlers(category) {
+  return {
+    create: asyncHandler(async (req, res) => {
+      const result = await folderService.createFolder(actorWithId(req), {
+        category,
+        name: req.body.name,
+        parentId: req.body.parentId || null,
+      });
+      res.status(201).json(result);
+    }),
+    list: asyncHandler(async (req, res) => {
+      const result = await folderService.listFolders(actorWithId(req), {
+        category,
+        parentId: req.query.parentId || null,
+      });
+      res.json(result);
+    }),
+    get: asyncHandler(async (req, res) => {
+      const result = await folderService.getFolder(actorWithId(req), req.params.id, category);
+      res.json(result);
+    }),
+    path: asyncHandler(async (req, res) => {
+      const result = await folderService.getFolderPath(
+        actorWithId(req),
+        req.params.id,
+        category,
+      );
+      res.json(result);
+    }),
+    rename: asyncHandler(async (req, res) => {
+      const result = await folderService.renameFolder(actorWithId(req), req.params.id, {
+        category,
+        name: req.body.name,
+      });
+      res.json(result);
+    }),
+    move: asyncHandler(async (req, res) => {
+      const result = await folderService.moveFolder(actorWithId(req), req.params.id, {
+        category,
+        parentId: req.body.parentId ?? null,
+      });
+      res.json(result);
+    }),
+    remove: asyncHandler(async (req, res) => {
+      try {
+        const result = await folderService.deleteFolder(actorWithId(req), req.params.id, {
+          category,
+          force: req.query.force === '1' || req.query.force === 'true' || req.body?.force === true,
+        });
+        res.json(result);
+      } catch (err) {
+        if (err?.code === 'FOLDER_NOT_EMPTY') {
+          res.status(409).json({
+            error: err.message,
+            message: err.message,
+            code: err.code,
+            assetCount: err.assetCount,
+            subfolderCount: err.subfolderCount,
+          });
+          return;
+        }
+        throw err;
+      }
+    }),
+    ensurePath: asyncHandler(async (req, res) => {
+      const result = await folderService.ensureFolderPath(actorWithId(req), {
+        category,
+        parentId: req.body.parentId || null,
+        pathParts: Array.isArray(req.body.pathParts) ? req.body.pathParts : [],
+      });
+      res.json(result);
+    }),
+  };
+}
+
+export function makeMoveAssetsHandler(category) {
+  return asyncHandler(async (req, res) => {
+    const result = await moveAssets(actorWithId(req), {
+      category,
+      assetIds: req.body.assetIds || [],
+      folderId: req.body.folderId ?? null,
+    });
     res.json(result);
   });
 }
