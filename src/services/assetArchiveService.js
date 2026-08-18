@@ -1,15 +1,13 @@
 import path from 'path';
-import archiverModule from 'archiver';
+import { createRequire } from 'module';
 import Asset from '../models/Asset.js';
 import AssetFolder from '../models/AssetFolder.js';
 import { AppError } from '../utils/AppError.js';
 import { collectDescendantIds, toObjectId } from './assetFolderService.js';
 import { readAssetBytes } from './assetService.js';
 
-const archiver =
-  typeof archiverModule === 'function'
-    ? archiverModule
-    : archiverModule?.default;
+const require = createRequire(import.meta.url);
+const archiver = require('archiver');
 
 function sanitizeZipName(name) {
   const cleaned = String(name || 'file')
