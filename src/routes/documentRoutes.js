@@ -8,6 +8,8 @@ import {
   makeCategoryDeleteHandler,
   makeFolderHandlers,
   makeMoveAssetsHandler,
+  makeBulkDeleteAssetsHandler,
+  makeBulkDownloadAssetsHandler,
   serveAssetFile,
   serveAssetThumbnail,
   removeAssetLocationHandler,
@@ -33,11 +35,14 @@ router.post('/folders', roleMiddleware(['admin']), folders.create);
 router.post('/folders/ensure-path', roleMiddleware(['admin']), folders.ensurePath);
 router.get('/folders/:id', roleMiddleware(['admin', 'partner']), folders.get);
 router.get('/folders/:id/path', roleMiddleware(['admin', 'partner']), folders.path);
+router.get('/folders/:id/download', roleMiddleware(['admin', 'partner']), folders.download);
 router.patch('/folders/:id', roleMiddleware(['admin']), folders.rename);
 router.post('/folders/:id/move', roleMiddleware(['admin']), folders.move);
 router.delete('/folders/:id', roleMiddleware(['admin']), folders.remove);
 
 router.post('/move', roleMiddleware(['admin']), makeMoveAssetsHandler('documents'));
+router.post('/bulk-delete', roleMiddleware(['admin']), makeBulkDeleteAssetsHandler('documents'));
+router.post('/download-zip', roleMiddleware(['admin', 'partner']), makeBulkDownloadAssetsHandler('documents'));
 
 router.get('/:id', roleMiddleware(['admin', 'partner']), makeCategoryGetHandler('documents'));
 router.get('/:id/file', roleMiddleware(['admin', 'partner']), serveAssetFile);

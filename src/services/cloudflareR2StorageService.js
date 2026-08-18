@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import path from 'path';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { AppError } from '../utils/AppError.js';
 
 /**
@@ -74,13 +74,52 @@ export function isR2Configured(category) {
   if (!accountId || !accessKeyId || !secretAccessKey) return false;
 
   if (category) {
-    const { bucketName, publicBaseUrl } = getBucketConfig(category);
-    return Boolean(bucketName && publicBaseUrl);
+    const { bucketName } = getBucketConfig(category);
+    return Boolean(bucketName);
   }
 
   return (
     isR2Configured('documents') || isR2Configured('marketing_assets')
   );
+}
+
+export function publicUrlForKey(category, key) {
+  if (!key) return '';
+  const { publicBaseUrl } = getBucketConfig(category);
+  if (!publicBaseUrl) return '';
+  return `${publicBaseUrl}/${String(key).replace(/^\/+/, '')}`;
+}
+
+/**
+ * Read an object from R2 by key. Used so production can serve files without
+ * relying on a public CDN URL or a local uploads/ folder.
+ */
+export async function getObjectBuffer(category, key) {
+  if (!key) return null;
+  const client = getClient();
+  const { bucketName } = getBucketConfig(category);
+  if (!client || !bucketName) return null;
+  try {
+    const out = await client.send(
+      new GetObjectCommand({
+        Bucket: bucketName,
+        Key: String(key).replace(/^\/+/, ''),
+      }),
+    );
+    const bytes = await out.Body.transformToByteArray();
+    if (!bytes?.length) return null;
+    return {
+      buffer: Buffer.from(bytes),
+      contentType: out.ContentType || 'application/octet-stream',
+    };
+  } catch (err) {
+    const status = err?.$metadata?.httpStatusCode;
+    if (status !== 404) {
+      // eslint-disable-next-line no-console
+      console.warn(`[r2] getObject failed key=${key} status=${status} ${err?.name || err?.message}`);
+    }
+    return null;
+  }
 }
 
 function getClient() {
@@ -125,7 +164,7 @@ export async function uploadFile(file, options = {}) {
   }
 
   const client = getClient();
-  const { bucketName, publicBaseUrl, folder: defaultFolder } = getBucketConfig(category);
+  const { bucketName, folder: defaultFolder } = getBucketConfig(category);
   const folder = (options.folder || defaultFolder).replace(/^\/+|\/+$/g, '');
   const ext = sanitizeExt(file.originalname);
   const key = `${folder}/${Date.now()}-${randomUUID().replace(/-/g, '').slice(0, 12)}${ext}`;
@@ -171,7 +210,7 @@ export async function uploadFile(file, options = {}) {
 
   return {
     key,
-    fileUrl: `${publicBaseUrl}/${key}`,
+    fileUrl: publicUrlForKey(category, key),
     originalName: file.originalname,
     contentType: file.mimetype || 'application/octet-stream',
     fileSize: file.size,
@@ -181,4 +220,6 @@ export async function uploadFile(file, options = {}) {
 export const CloudflareR2StorageService = {
   isConfigured: isR2Configured,
   uploadFile,
+  getObjectBuffer,
+  publicUrlForKey,
 };
