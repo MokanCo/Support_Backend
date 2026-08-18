@@ -8,7 +8,14 @@ import {
   removeAsset,
   removeAssetLocation,
   moveAssets,
+  bulkDeleteAssets,
 } from '../services/assetService.js';
+import {
+  listFolderArchiveEntries,
+  listAssetArchiveEntries,
+  streamArchive,
+} from '../services/assetArchiveService.js';
+import { getObjectBuffer as getR2ObjectBuffer } from '../services/cloudflareR2StorageService.js';
 import * as folderService from '../services/assetFolderService.js';
 import { AppError } from '../utils/AppError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -119,9 +126,18 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   }
 
+  if (fileInfo.storageKey) {
+    const fromR2 = await getR2ObjectBuffer(fileInfo.category, fileInfo.storageKey);
+    if (fromR2?.buffer?.length) {
+      res.setHeader('Content-Type', fromR2.contentType || fileInfo.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', contentDisposition);
+      res.send(fromR2.buffer);
+      return;
+    }
+  }
+
   if (fileInfo.redirect && fileInfo.fileUrl) {
-    // Always proxy from R2 — never redirect the browser to the public CDN URL
-    // (that would expose a copyable direct download link).
+    // Proxy from R2 public URL when API GetObject is unavailable.
     const upstream = await fetch(fileInfo.fileUrl);
     if (!upstream.ok) {
       throw new AppError('File not found on storage', 404);
@@ -135,6 +151,10 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
     const buf = Buffer.from(await upstream.arrayBuffer());
     res.send(buf);
     return;
+  }
+
+  if (!fileInfo.filePath) {
+    throw new AppError('File not found on storage', 404);
   }
 
   res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
@@ -261,6 +281,7 @@ export function makeFolderHandlers(category) {
       const result = await folderService.listFolders(actorWithId(req), {
         category,
         parentId: req.query.parentId || null,
+        allFolders: req.query.allFolders === '1' || req.query.allFolders === 'true',
       });
       res.json(result);
     }),
@@ -319,6 +340,10 @@ export function makeFolderHandlers(category) {
       });
       res.json(result);
     }),
+    download: asyncHandler(async (req, res) => {
+      const pack = await listFolderArchiveEntries(actorWithId(req), req.params.id, category);
+      await streamArchive(res, pack);
+    }),
   };
 }
 
@@ -330,5 +355,25 @@ export function makeMoveAssetsHandler(category) {
       folderId: req.body.folderId ?? null,
     });
     res.json(result);
+  });
+}
+
+export function makeBulkDeleteAssetsHandler(category) {
+  return asyncHandler(async (req, res) => {
+    const result = await bulkDeleteAssets(actorFromReq(req), {
+      category,
+      assetIds: req.body.assetIds || [],
+    });
+    res.json(result);
+  });
+}
+
+export function makeBulkDownloadAssetsHandler(category) {
+  return asyncHandler(async (req, res) => {
+    const pack = await listAssetArchiveEntries(actorFromReq(req), {
+      category,
+      assetIds: req.body.assetIds || [],
+    });
+    await streamArchive(res, pack);
   });
 }

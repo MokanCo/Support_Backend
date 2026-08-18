@@ -8,6 +8,8 @@ import { AppError } from '../utils/AppError.js';
 import {
   isR2Configured,
   uploadFile as uploadToR2,
+  getObjectBuffer as getR2ObjectBuffer,
+  publicUrlForKey,
 } from './cloudflareR2StorageService.js';
 import { maybeConvertImageToWebp } from './imageOptimizeService.js';
 import {
@@ -370,33 +372,109 @@ export async function getAssetById(id, { role, locationId }) {
   return { asset: formatAsset(doc) };
 }
 
+/** Best-effort R2 object key from a DB asset row. */
+function resolveR2Key(doc) {
+  if (doc.storageKey) return String(doc.storageKey).replace(/^\/+/, '');
+  if (doc.fileUrl) {
+    try {
+      const { pathname } = new URL(doc.fileUrl);
+      const key = pathname.replace(/^\/+/, '');
+      if (key) return key;
+    } catch {
+      /* ignore invalid URL */
+    }
+  }
+  return '';
+}
+
 /** Internal file info for streaming — uses DB URLs, not the redacted API shape. */
 export async function getAssetFilePath(id, { role, locationId }) {
   const doc = await loadAccessibleAssetDoc(id, { role, locationId });
   const originalName = doc.originalName;
   const mimeType = doc.mimeType;
+  const r2Key = resolveR2Key(doc);
+  const fileUrl = doc.fileUrl || (r2Key ? publicUrlForKey(doc.category, r2Key) : '');
+  const localPath = path.join(ASSET_UPLOAD_ROOT, doc.storedName || '');
+  const hasLocal = Boolean(doc.storedName && fs.existsSync(localPath));
 
-  if (doc.fileUrl) {
+  if (fileUrl || r2Key || hasLocal) {
     return {
-      fileUrl: doc.fileUrl,
+      fileUrl,
+      storageKey: r2Key,
+      category: doc.category,
       originalName,
       mimeType,
-      redirect: true,
+      redirect: Boolean(fileUrl),
       storedName: doc.storedName || '',
+      filePath: hasLocal ? localPath : undefined,
     };
   }
 
-  const filePath = path.join(ASSET_UPLOAD_ROOT, doc.storedName || '');
-  if (!doc.storedName || !fs.existsSync(filePath)) {
-    throw new AppError('File not found on server', 404);
+  throw new AppError(
+    'File not found on server. This file was saved on local disk and is not in Cloudflare R2. Re-upload it, or run npm run migrate:assets-to-r2 on the machine that has the file.',
+    404,
+  );
+}
+
+/** Load file bytes for zip/download. Returns null if the file cannot be read. */
+export async function readAssetBytes(doc) {
+  const r2Key = resolveR2Key(doc);
+  if (r2Key) {
+    const fromR2 = await getR2ObjectBuffer(doc.category, r2Key);
+    if (fromR2?.buffer?.length) {
+      return {
+        buffer: fromR2.buffer,
+        mimeType: fromR2.contentType || doc.mimeType,
+        originalName: doc.originalName,
+      };
+    }
   }
-  return {
-    filePath,
-    originalName,
-    mimeType,
-    redirect: false,
-    storedName: doc.storedName,
-  };
+  const fileUrl = doc.fileUrl || (r2Key ? publicUrlForKey(doc.category, r2Key) : '');
+  if (fileUrl) {
+    try {
+      const upstream = await fetch(fileUrl);
+      if (upstream.ok) {
+        const buffer = Buffer.from(await upstream.arrayBuffer());
+        if (buffer.length) {
+          return {
+            buffer,
+            mimeType: upstream.headers.get('content-type') || doc.mimeType,
+            originalName: doc.originalName,
+          };
+        }
+      }
+    } catch {
+      /* try local */
+    }
+  }
+  if (doc.storedName) {
+    const filePath = path.join(ASSET_UPLOAD_ROOT, doc.storedName);
+    if (fs.existsSync(filePath)) {
+      const buffer = await fs.promises.readFile(filePath);
+      if (buffer.length) {
+        return { buffer, mimeType: doc.mimeType, originalName: doc.originalName };
+      }
+    }
+  }
+  return null;
+}
+
+export async function bulkDeleteAssets(actor, { category, assetIds }) {
+  if (actor?.role !== 'admin') throw new AppError('Only admin can delete assets', 403);
+  if (!['documents', 'marketing_assets'].includes(category)) {
+    throw new AppError('category must be documents or marketing_assets', 400);
+  }
+  const ids = (assetIds || []).map((id) => {
+    if (!mongoose.Types.ObjectId.isValid(id)) throw new AppError('Invalid asset id', 400);
+    return id;
+  });
+  if (!ids.length) throw new AppError('No assets selected', 400);
+
+  const result = await Asset.updateMany(
+    { _id: { $in: ids }, category, isDeleted: { $ne: true } },
+    { $set: { isDeleted: true } },
+  );
+  return { deleted: result.modifiedCount };
 }
 
 /**
@@ -425,6 +503,10 @@ export async function getAssetThumbnailBuffer(id, { role, locationId }) {
   }
 
   if (doc.thumbnailStorageKey) {
+    const fromR2 = await getR2ObjectBuffer(doc.category, doc.thumbnailStorageKey);
+    if (fromR2?.buffer?.length) {
+      return { buffer: fromR2.buffer, mimeType: fromR2.contentType || 'image/jpeg' };
+    }
     const localPath = path.join(ASSET_UPLOAD_ROOT, doc.thumbnailStorageKey);
     if (fs.existsSync(localPath)) {
       const buffer = await fs.promises.readFile(localPath);
@@ -434,9 +516,15 @@ export async function getAssetThumbnailBuffer(id, { role, locationId }) {
 
   // On-demand generate from the video (fixes older uploads / failed ffmpeg on deploy).
   let videoBuffer = null;
-  if (doc.fileUrl) {
+  const videoKey = resolveR2Key(doc);
+  if (videoKey) {
+    const fromR2 = await getR2ObjectBuffer(doc.category, videoKey);
+    if (fromR2?.buffer?.length) videoBuffer = fromR2.buffer;
+  }
+  if (!videoBuffer?.length && doc.fileUrl) {
     videoBuffer = await loadFromUrl(doc.fileUrl);
-  } else if (doc.storedName) {
+  }
+  if (!videoBuffer?.length && doc.storedName) {
     const filePath = path.join(ASSET_UPLOAD_ROOT, doc.storedName);
     if (fs.existsSync(filePath)) {
       videoBuffer = await fs.promises.readFile(filePath);

@@ -98,24 +98,25 @@ export async function createFolder(actor, { name, parentId = null, category }) {
   return { folder: formatFolder(doc) };
 }
 
-export async function listFolders(actor, { category, parentId = null }) {
+export async function listFolders(actor, { category, parentId = null, allFolders = false }) {
   assertCategory(category);
   // Partners may browse folder structure; file visibility still gated on assets.
   if (!['admin', 'partner'].includes(actor?.role)) {
     throw new AppError('Access denied', 403);
   }
 
-  const parentOid = parentId ? toObjectId(parentId, 'parentId') : null;
-  if (parentOid) await loadFolder(parentOid, category);
-
-  const rows = await AssetFolder.find({
+  const filter = {
     category,
-    parentId: parentOid,
     isDeleted: { $ne: true },
-  })
-    .sort({ name: 1 })
-    .lean();
+  };
 
+  if (!allFolders) {
+    const parentOid = parentId ? toObjectId(parentId, 'parentId') : null;
+    if (parentOid) await loadFolder(parentOid, category);
+    filter.parentId = parentOid;
+  }
+
+  const rows = await AssetFolder.find(filter).sort({ name: 1 }).lean();
   return { folders: rows.map(formatFolder) };
 }
 
@@ -203,7 +204,7 @@ export async function moveFolder(actor, id, { parentId = null, category }) {
 /**
  * Soft-delete a folder.
  * - force=false: reject if it has subfolders or assets
- * - force=true: soft-delete folder tree; move assets to parent (or root) — never delete files
+ * - force=true: soft-delete the folder tree AND all files inside it
  */
 export async function deleteFolder(actor, id, { category, force = false }) {
   if (actor?.role !== 'admin') throw new AppError('Only admin can manage folders', 403);
@@ -228,7 +229,7 @@ export async function deleteFolder(actor, id, { category, force = false }) {
 
   if (!force && (subfolderCount > 0 || assetCount > 0)) {
     const err = new AppError(
-      `This folder contains ${assetCount} file(s) and ${subfolderCount} subfolder(s). Confirm to delete the folder structure (files will be moved to the parent folder).`,
+      `This folder contains ${assetCount} file(s) and ${subfolderCount} subfolder(s). Confirm to delete the folder and all files inside it.`,
       409,
     );
     err.code = 'FOLDER_NOT_EMPTY';
@@ -237,12 +238,13 @@ export async function deleteFolder(actor, id, { category, force = false }) {
     throw err;
   }
 
-  const moveTarget = doc.parentId || null;
+  let deletedAssets = 0;
   if (assetCount > 0) {
-    await Asset.updateMany(
+    const result = await Asset.updateMany(
       { category, folderId: { $in: folderIds }, isDeleted: { $ne: true } },
-      { $set: { folderId: moveTarget } },
+      { $set: { isDeleted: true } },
     );
+    deletedAssets = result.modifiedCount;
   }
 
   await AssetFolder.updateMany(
@@ -252,7 +254,7 @@ export async function deleteFolder(actor, id, { category, force = false }) {
 
   return {
     ok: true,
-    movedAssets: assetCount,
+    deletedAssets,
     deletedFolders: folderIds.length,
   };
 }
@@ -299,4 +301,4 @@ export async function ensureFolderPath(actor, { category, parentId = null, pathP
   };
 }
 
-export { formatFolder, toObjectId };
+export { formatFolder, toObjectId, collectDescendantIds };
