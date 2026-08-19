@@ -16,6 +16,15 @@ const userNotificationSchema = new mongoose.Schema(
     },
     kind: { type: String, required: true },
     ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', default: null, index: true },
+    /**
+     * Generic pointer to whatever record this notification is about, for
+     * kinds that aren't a real Ticket (ticketId is typed `ref: 'Ticket'` and
+     * should only ever hold an actual ticket id). entityType names the
+     * domain (e.g. 'ar_payment_submission'); entityId is that record's id.
+     * Both null for plain ticket notifications.
+     */
+    entityType: { type: String, default: null },
+    entityId: { type: String, default: null, index: true },
     title: { type: String, required: true },
     body: { type: String, default: '' },
     dismissedAt: { type: Date, default: null, index: true },
