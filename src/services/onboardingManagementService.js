@@ -8,6 +8,8 @@ import User from '../models/User.js';
 import Location from '../models/Location.js';
 import { AppError } from '../utils/AppError.js';
 import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
+import { runInBackground } from '../utils/backgroundTasks.js';
+import { sendPortalInviteEmail } from './boardMailService.js';
 import * as locationService from './locationService.js';
 import * as userService from './userService.js';
 import {
@@ -350,6 +352,11 @@ export async function approveRequest(id, reviewer) {
   await OnboardingRequestTask.deleteMany({ requestId: request._id });
   await instantiateRequestTasks(request._id, request.selectedServices);
 
+  // Location + user are created right away on approval — not gated on the
+  // opening date or on service-task completion (those still only affect the
+  // tracking page/status via recalculateProgress, unchanged).
+  await provisionLocationAndUser(request, reviewer);
+
   const trackingUrl = buildTrackingUrl(request.trackingToken);
 
   await logActivity(request._id, {
@@ -607,8 +614,74 @@ export async function getPublicTracking(token) {
 }
 
 /**
- * Admin manually provisions location + user for an approved onboarding request.
- * Only allowed when: status is in_progress, opening date has arrived, all tasks done.
+ * Creates the real Location (+ its partner User account) from an onboarding
+ * request's captured data — idempotent (skips whichever half already
+ * exists). This is the single place that does this mapping; both approval
+ * (immediate, unconditional) and the manual provision fallback below call it.
+ */
+async function provisionLocationAndUser(request, reviewer) {
+  let locationId = request.locationId ? String(request.locationId) : null;
+  let userId = request.userId ? String(request.userId) : null;
+  if (locationId && userId) return { locationId, userId, created: false };
+
+  if (!locationId) {
+    const loc = await locationService.createLocation({
+      name: request.location.locationName,
+      email: request.location.locationEmail,
+      phone: request.location.locationPhone,
+      address: request.location.address,
+      city: request.location.city,
+      state: request.location.state,
+      zip: request.location.zip,
+    });
+    locationId = loc.id;
+    request.locationId = locationId;
+  }
+
+  if (!userId) {
+    const user = await userService.createUser({
+      name: ownerName(request),
+      email: request.personal.email,
+      role: 'partner',
+      locationId,
+      sendInvite: true,
+    });
+    userId = user.id;
+    request.userId = userId;
+
+    // Same portal-invite email an admin's manual "create user + send invite"
+    // sends — matches the account/temporary-password email the partner
+    // expects after approval.
+    runInBackground('onboarding-portal-invite-email', () =>
+      sendPortalInviteEmail({
+        to: user.email,
+        name: user.name,
+        email: user.email,
+        temporaryPassword: userService.INVITE_TEMP_PASSWORD,
+      }),
+    );
+  }
+
+  await request.save();
+
+  await logActivity(request._id, {
+    eventType: 'provisioned',
+    title: 'Location & User Created',
+    description: `Portal access provisioned by ${reviewer?.name ?? 'admin'}.`,
+    isPublic: true,
+    createdBy: reviewer?.id,
+    createdByName: reviewer?.name ?? '',
+  });
+
+  return { locationId, userId, created: true };
+}
+
+/**
+ * Admin manually provisions location + user for an approved onboarding
+ * request — a fallback for requests approved before this became automatic,
+ * or where approval-time provisioning failed. Still gated on opening date +
+ * all tasks complete, same as before; ordinary approvals no longer need it
+ * since approveRequest() now provisions immediately.
  */
 export async function provisionRequest(id, reviewer) {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -643,45 +716,7 @@ export async function provisionRequest(id, reviewer) {
     throw new AppError(`All service tasks must be completed first (${completed}/${total} done)`, 409);
   }
 
-  let locationId = request.locationId ? String(request.locationId) : null;
-  let userId = request.userId ? String(request.userId) : null;
-
-  if (!locationId) {
-    const loc = await locationService.createLocation({
-      name: request.location.locationName,
-      email: request.location.locationEmail,
-      phone: request.location.locationPhone,
-      address: request.location.address,
-      city: request.location.city,
-      state: request.location.state,
-      zip: request.location.zip,
-    });
-    locationId = loc.id;
-    request.locationId = locationId;
-  }
-
-  if (!userId) {
-    const user = await userService.createUser({
-      name: ownerName(request),
-      email: request.personal.email,
-      role: 'partner',
-      locationId,
-      sendInvite: true,
-    });
-    userId = user.id;
-    request.userId = userId;
-  }
-
-  await request.save();
-
-  await logActivity(request._id, {
-    eventType: 'provisioned',
-    title: 'Location & User Created',
-    description: `Portal access provisioned by ${reviewer.name ?? 'admin'}.`,
-    isPublic: true,
-    createdBy: reviewer.id,
-    createdByName: reviewer.name ?? '',
-  });
+  await provisionLocationAndUser(request, reviewer);
 
   return { request: formatRequestRow(request) };
 }

@@ -19,11 +19,10 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     sortOrder: 0,
     tasks: [
       "Listing Creation",
-      "Listing Optimization",
-      "Verification request submitted",
+      "Verification Request Submitted",
       "Verification Completed",
-      "Live listing Check",
-      "Business Verified on Google",
+      "Listing Optimization",
+      "Live listing check",
     ],
   },
   {
@@ -35,11 +34,10 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     sortOrder: 1,
     tasks: [
       "Listing Creation",
-      "Listing Optimization",
-      "Verification request submitted",
+      "Verification Request Submitted",
       "Verification Completed",
-      "Live listing Check",
-      "Business Verified on Apple",
+      "Listing Optimization",
+      "Live listing check",
     ],
   },
   {
@@ -51,11 +49,10 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     sortOrder: 2,
     tasks: [
       "Listing Creation",
-      "Listing Optimization",
-      "Verification request submitted",
+      "Verification Request Submitted",
       "Verification Completed",
-      "Live listing Check",
-      "Business Verified on Yelp",
+      "Listing Optimization",
+      "Live listing check",
     ],
   },
 
@@ -114,11 +111,9 @@ export const ONBOARDING_SERVICE_TEMPLATE_DEFS = [
     iconClass: "bg-slate-100 text-slate-900",
     sortOrder: 6,
     tasks: [
-      "Store Location Creation",
-      "Store Optimization",
-      "Location Publishing",
-      "Geo Tag Verification",
-      "Store Live on TikTok",
+      "Initiate TikTok location indexing",
+      "Validate location details",
+      "Confirm geotag availability",
     ],
   },
 
