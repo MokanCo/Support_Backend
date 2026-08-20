@@ -12,7 +12,8 @@
     "seed:onboarding": "node scripts/seed-onboarding.js",
     "remove-demo": "node scripts/clean-db.js",
     "clean-db": "node scripts/clean-db.js",
-    "migrate:assets-to-r2": "node scripts/migrate-assets-to-r2.js"
+    "migrate:assets-to-r2": "node scripts/migrate-assets-to-r2.js",
+    "test": "node --test tests"
   },
   "engines": {
     "node": ">=18.0.0"

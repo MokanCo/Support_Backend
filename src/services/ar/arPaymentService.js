@@ -27,8 +27,15 @@ function formatPayment(doc, { invoiceNumber = '', locationName = '' } = {}) {
     locationName,
     paymentDate: d.paymentDate,
     amount: d.amount,
+    originalAmount: d.originalAmount ?? d.amount,
+    stripeProcessingFee: d.stripeProcessingFee || 0,
+    stripeChargeAmount: d.stripeChargeAmount ?? d.amount,
+    currency: d.currency || 'USD',
     paymentMethod: d.paymentMethod,
+    paymentStatus: d.paymentStatus || 'paid',
     transactionReference: d.transactionReference,
+    stripePaymentIntentId: d.stripePaymentIntentId || '',
+    stripeCheckoutSessionId: d.stripeCheckoutSessionId || '',
     notes: d.notes,
     attachmentUrl: d.attachmentUrl,
     recordedBy: d.recordedBy ? String(d.recordedBy) : null,
@@ -42,6 +49,9 @@ export async function listPayments(actor, query) {
     defaultSort: 'paymentDate',
   });
   const filter = { isDeleted: { $ne: true }, ...locationScopeFilter(actor, query.locationId) };
+  if (query.includeFailed !== 'true') {
+    filter.paymentStatus = { $nin: ['failed', 'pending'] };
+  }
   const invoiceId = optionalObjectId(query.invoiceId, 'invoiceId');
   if (invoiceId) filter.invoiceId = invoiceId;
 
@@ -103,17 +113,35 @@ export async function recordPayment(actor, input, ipAddress = '') {
   const amount = money(input.amount);
   if (amount <= 0) throw new AppError('Amount must be greater than zero', 400);
 
+  const paymentStatus = input.paymentStatus || 'paid';
   const payment = await ArPayment.create({
     invoiceId: invoice._id,
     locationId: invoice.locationId,
     paymentDate: input.paymentDate ? new Date(input.paymentDate) : new Date(),
     amount,
+    originalAmount: input.originalAmount != null ? money(input.originalAmount) : amount,
+    stripeProcessingFee: money(input.stripeProcessingFee || 0),
+    stripeChargeAmount:
+      input.stripeChargeAmount != null ? money(input.stripeChargeAmount) : amount,
+    currency: String(input.currency || invoice.currency || 'USD').toUpperCase(),
     paymentMethod: input.paymentMethod || 'zelle',
+    paymentStatus,
     transactionReference: String(input.transactionReference || '').trim(),
+    stripePaymentIntentId: String(input.stripePaymentIntentId || '').trim(),
+    stripeCheckoutSessionId: String(input.stripeCheckoutSessionId || '').trim(),
     notes: String(input.notes || '').trim(),
     attachmentUrl: String(input.attachmentUrl || '').trim(),
     recordedBy: actor.id,
   });
+
+  if (paymentStatus === 'failed') {
+    const location = await Location.findById(invoice.locationId).lean();
+    const formatted = formatPayment(payment, {
+      invoiceNumber: invoice.invoiceNumber || '',
+      locationName: location?.name || '',
+    });
+    return { payment: formatted, invoiceId: String(invoice._id) };
+  }
 
   const updated = await refreshInvoiceBalances(invoice._id);
   pushTimeline(updated, {

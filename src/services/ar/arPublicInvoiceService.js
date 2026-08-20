@@ -8,6 +8,7 @@ import Location from '../../models/Location.js';
 import ArBillingProfile from '../../models/ArBillingProfile.js';
 import { AppError } from '../../utils/AppError.js';
 import { money } from './arAccess.js';
+import { quoteStripePayment } from '../../config/stripeFees.js';
 import { getOrCreateSettings } from './arSettingsService.js';
 import { writeArAudit } from './arAuditService.js';
 import { createArPaymentSubmittedAdminNotification } from '../notificationService.js';
@@ -194,7 +195,11 @@ export async function getPublicInvoiceByToken(token) {
     // server-side via /stripe-checkout-session.
     stripe:
       stripe && process.env.STRIPE_SECRET_KEY
-        ? { enabled: true, label: stripe.label || 'Credit / Debit Card' }
+        ? {
+            enabled: true,
+            label: stripe.label || 'Credit / Debit Card',
+            fee: quoteStripePayment(balanceDue, 'stripe', doc.currency || 'USD'),
+          }
         : { enabled: false },
   };
 }
