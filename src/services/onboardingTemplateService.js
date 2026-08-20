@@ -112,8 +112,14 @@ export async function buildPreviewServiceGroups(selectedSlugs, metaMap) {
 }
 
 /**
- * Align persisted request tasks with the current template definitions.
- * Preserves completion state and comments when task titles still match.
+ * Align persisted request tasks with the current template definitions —
+ * but ONLY for services this request doesn't already have tasks for (i.e.
+ * a service newly added to selectedServices after approval). A service the
+ * request was already instantiated with keeps its original step list and
+ * completion state untouched even if the shared template is edited later —
+ * template edits (e.g. reordering/renaming steps) apply to newly-approved
+ * requests only, never retroactively to ones already in progress.
+ * Still removes tasks for services that were de-selected from the request.
  */
 export async function reconcileRequestTasks(requestId, selectedSlugs) {
   const metaMap = await getActiveServiceMetaMap();
@@ -125,53 +131,51 @@ export async function reconcileRequestTasks(requestId, selectedSlugs) {
     return 0;
   }
 
-  const [templates, existing] = await Promise.all([
-    OnboardingTaskTemplate.find({ serviceSlug: { $in: slugs } })
-      .sort({ serviceSlug: 1, sortOrder: 1 })
-      .lean(),
-    OnboardingRequestTask.find({ requestId }).lean(),
-  ]);
+  const existing = await OnboardingRequestTask.find({ requestId }).lean();
 
-  // Upsert each template task — preserves existing _id so frontend refs stay valid.
-  // Remove tasks that are no longer in the template set.
-  const templateKeys = new Set(templates.map((t) => `${t.serviceSlug}::${t.title}`));
+  // Remove tasks for services no longer selected on this request.
+  const slugSet = new Set(slugs);
   const staleIds = existing
-    .filter((t) => !templateKeys.has(`${t.serviceSlug}::${t.title}`))
+    .filter((t) => !slugSet.has(t.serviceSlug))
     .map((t) => t._id);
   if (staleIds.length > 0) {
     await OnboardingRequestTask.deleteMany({ _id: { $in: staleIds } });
   }
 
-  const existingMap = new Map();
-  for (const t of existing) {
-    existingMap.set(`${t.serviceSlug}::${t.title}`, t);
+  // Only instantiate templates for slugs this request has no tasks for yet —
+  // already-instantiated slugs are left exactly as they are.
+  const instantiatedSlugs = new Set(existing.map((t) => t.serviceSlug));
+  const newSlugs = slugs.filter((slug) => !instantiatedSlugs.has(slug));
+  if (newSlugs.length === 0) {
+    return 0;
   }
+
+  const templates = await OnboardingTaskTemplate.find({ serviceSlug: { $in: newSlugs } })
+    .sort({ serviceSlug: 1, sortOrder: 1 })
+    .lean();
 
   const ops = templates.map((tpl) => {
     const meta = metaMap.get(tpl.serviceSlug);
-    const prev = existingMap.get(`${tpl.serviceSlug}::${tpl.title}`);
     return {
       updateOne: {
         filter: { requestId, serviceSlug: tpl.serviceSlug, title: tpl.title },
         update: {
-          $set: {
-            serviceTitle: meta?.title ?? tpl.serviceSlug,
-            taskTemplateId: tpl._id,
-            sortOrder: tpl.sortOrder,
-          },
           $setOnInsert: {
             requestId,
             serviceSlug: tpl.serviceSlug,
+            serviceTitle: meta?.title ?? tpl.serviceSlug,
             title: tpl.title,
-            completed: Boolean(prev?.completed),
-            completedAt: prev?.completedAt ?? null,
-            completedBy: prev?.completedBy ?? null,
-            completedByName: prev?.completedByName ?? '',
-            publicComment: prev?.publicComment ?? '',
-            internalNote: prev?.internalNote ?? '',
-            issueDescription: prev?.issueDescription ?? '',
-            resolution: prev?.resolution ?? '',
-            attachmentUrl: prev?.attachmentUrl ?? '',
+            taskTemplateId: tpl._id,
+            sortOrder: tpl.sortOrder,
+            completed: false,
+            completedAt: null,
+            completedBy: null,
+            completedByName: '',
+            publicComment: '',
+            internalNote: '',
+            issueDescription: '',
+            resolution: '',
+            attachmentUrl: '',
           },
         },
         upsert: true,
