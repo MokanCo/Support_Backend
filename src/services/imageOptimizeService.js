@@ -34,10 +34,10 @@ export function isConvertibleImage(file) {
   return CONVERTIBLE_EXT.has(ext);
 }
 
-function webpFileName(originalName) {
+function webpFileName(originalName, suffix = '') {
   const base = path.basename(originalName || 'image', path.extname(originalName || ''));
   const safe = (base || 'image').replace(/[^\w.\-()+ ]+/g, '_').slice(0, 180);
-  return `${safe}.webp`;
+  return `${safe}${suffix}.webp`;
 }
 
 /**
@@ -82,5 +82,37 @@ export async function maybeConvertImageToWebp(file) {
       'Could not convert image to WebP. Try a different image file.',
       400,
     );
+  }
+}
+
+/**
+ * Small WebP card preview (CDN-friendly). Used for video frames and image assets.
+ *
+ * @param {Buffer} buffer
+ * @param {{ originalname?: string; width?: number; quality?: number }} [opts]
+ * @returns {Promise<{ buffer: Buffer; originalname: string; mimetype: string; size: number } | null>}
+ */
+export async function toWebpThumbnail(buffer, opts = {}) {
+  if (!buffer?.length) return null;
+  const width = opts.width ?? 640;
+  const quality = opts.quality ?? 72;
+  const originalname = opts.originalname || 'thumb.webp';
+  try {
+    const out = await sharp(buffer, { animated: false, failOn: 'none' })
+      .rotate()
+      .resize({ width, withoutEnlargement: true })
+      .webp({ quality, effort: 4 })
+      .toBuffer();
+    if (!out.length) return null;
+    return {
+      buffer: out,
+      originalname: webpFileName(originalname, '-thumb'),
+      mimetype: 'image/webp',
+      size: out.length,
+    };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[images] WebP thumbnail failed', err?.message || err);
+    return null;
   }
 }

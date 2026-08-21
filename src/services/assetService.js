@@ -11,7 +11,7 @@ import {
   getObjectBuffer as getR2ObjectBuffer,
   publicUrlForKey,
 } from './cloudflareR2StorageService.js';
-import { maybeConvertImageToWebp } from './imageOptimizeService.js';
+import { maybeConvertImageToWebp, toWebpThumbnail } from './imageOptimizeService.js';
 import {
   maybeConvertVideoToWebm,
   extractThumbnailFromVideoBuffer,
@@ -89,9 +89,9 @@ function formatAsset(doc) {
     originalName: originalFileName,
     // Hide direct storage URLs for videos (inspect / Network JSON).
     fileUrl: isVideoMime(mimeType) ? '' : d.fileUrl || '',
-    // Never expose CDN thumbnail URLs either — cards load via /:id/thumbnail.
+    // WebP card thumbs are public CDN URLs (same buckets as files) — safe to expose.
     hasThumbnail: Boolean(d.thumbnailUrl || d.thumbnailStorageKey) || isVideoMime(mimeType),
-    thumbnailUrl: '',
+    thumbnailUrl: d.thumbnailUrl || '',
     contentType: mimeType,
     mimeType,
     fileSize: d.size,
@@ -132,13 +132,22 @@ async function storeFileLocally(file) {
 }
 
 /**
- * Convert images → WebP and videos → WebM (+ thumbnail), then upload to R2 or local disk.
+ * Convert images → WebP (+ card thumbnail) and videos → WebM (+ WebP thumbnail),
+ * then upload to R2 or local disk.
  */
 async function persistUpload(file, category) {
   validateAssetFile(file);
   let optimized = await maybeConvertImageToWebp(file);
   if (!optimized.converted) {
     optimized = await maybeConvertVideoToWebm(optimized);
+  }
+
+  // Image assets get a small WebP card thumb so lists never download full files.
+  let cardThumb = optimized.thumbnail || null;
+  if (!cardThumb?.buffer?.length && String(optimized.mimetype || '').startsWith('image/')) {
+    cardThumb = await toWebpThumbnail(optimized.buffer, {
+      originalname: optimized.originalname,
+    });
   }
 
   let thumbnailUrl = '';
@@ -151,7 +160,7 @@ async function persistUpload(file, category) {
         {
           buffer: thumb.buffer,
           originalname: thumb.originalname,
-          mimetype: thumb.mimetype,
+          mimetype: thumb.mimetype || 'image/webp',
           size: thumb.size,
         },
         { category, folder: `${category === 'marketing_assets' ? 'marketing-assets' : 'documents'}/thumbnails` },
@@ -163,11 +172,11 @@ async function persistUpload(file, category) {
     const local = await storeFileLocally({
       buffer: thumb.buffer,
       originalname: thumb.originalname,
-      mimetype: thumb.mimetype,
+      mimetype: thumb.mimetype || 'image/webp',
       size: thumb.size,
     });
     thumbnailStorageKey = local.storedName;
-    // Local disk has no public CDN URL; card falls back to play-only until R2 is used.
+    // Local disk has no public CDN URL; cards fall back to /:id/thumbnail or fileUrl.
     thumbnailUrl = '';
   }
 
@@ -181,7 +190,7 @@ async function persistUpload(file, category) {
       },
       { category },
     );
-    await persistThumbnail(optimized.thumbnail);
+    await persistThumbnail(cardThumb);
     return {
       storageKey: uploaded.key,
       fileUrl: uploaded.fileUrl,
@@ -200,7 +209,7 @@ async function persistUpload(file, category) {
     mimetype: optimized.mimetype,
     size: optimized.size,
   });
-  await persistThumbnail(optimized.thumbnail);
+  await persistThumbnail(cardThumb);
   return {
     storageKey: '',
     fileUrl: '',
@@ -478,14 +487,17 @@ export async function bulkDeleteAssets(actor, { category, assetIds }) {
 }
 
 /**
- * Resolve video thumbnail bytes for the card preview.
- * Proxies R2 (no browser→CDN dependency) and generates+persists a thumbnail
- * when older production assets are missing one.
+ * Resolve card thumbnail bytes (WebP preferred).
+ * Proxies R2 when no public CDN URL is available, and generates+persists a
+ * WebP thumbnail for older production videos missing one.
  */
 export async function getAssetThumbnailBuffer(id, { role, locationId }) {
   const doc = await loadAccessibleAssetDoc(id, { role, locationId });
-  if (!String(doc.mimeType || '').startsWith('video/')) {
-    throw new AppError('Thumbnails are only available for videos', 400);
+  const mime = String(doc.mimeType || '');
+  const isVideo = mime.startsWith('video/');
+  const isImage = mime.startsWith('image/');
+  if (!isVideo && !isImage && !(doc.thumbnailUrl || doc.thumbnailStorageKey)) {
+    throw new AppError('Thumbnails are only available for images and videos', 400);
   }
 
   async function loadFromUrl(url) {
@@ -495,23 +507,115 @@ export async function getAssetThumbnailBuffer(id, { role, locationId }) {
     return buffer.length ? buffer : null;
   }
 
+  async function persistWebpThumb(thumb) {
+    if (!thumb?.buffer?.length) return;
+    if (isR2Configured(doc.category)) {
+      const uploaded = await uploadToR2(
+        {
+          buffer: thumb.buffer,
+          originalname: thumb.originalname,
+          mimetype: 'image/webp',
+          size: thumb.size,
+        },
+        {
+          category: doc.category,
+          folder: `${doc.category === 'marketing_assets' ? 'marketing-assets' : 'documents'}/thumbnails`,
+        },
+      );
+      doc.thumbnailUrl = uploaded.fileUrl;
+      doc.thumbnailStorageKey = uploaded.key;
+      await doc.save();
+      return;
+    }
+    const local = await storeFileLocally({
+      buffer: thumb.buffer,
+      originalname: thumb.originalname,
+      mimetype: 'image/webp',
+      size: thumb.size,
+    });
+    doc.thumbnailStorageKey = local.storedName;
+    doc.thumbnailUrl = '';
+    await doc.save();
+  }
+
+  /** Ensure legacy JPEG thumbs are upgraded to WebP in R2 when served. */
+  async function ensureWebp(buffer, contentType) {
+    const ct = String(contentType || '').toLowerCase();
+    if (ct.includes('webp') || (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[8] === 0x57)) {
+      return { buffer, mimeType: 'image/webp' };
+    }
+    const webp = await toWebpThumbnail(buffer, {
+      originalname: doc.originalName || 'thumb',
+    });
+    if (!webp?.buffer?.length) {
+      return { buffer, mimeType: ct || 'image/jpeg' };
+    }
+    try {
+      await persistWebpThumb(webp);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[assets] could not persist WebP thumbnail upgrade', err?.message || err);
+    }
+    return { buffer: webp.buffer, mimeType: 'image/webp' };
+  }
+
   if (doc.thumbnailUrl) {
     const existing = await loadFromUrl(doc.thumbnailUrl);
     if (existing) {
-      return { buffer: existing, mimeType: 'image/jpeg' };
+      const looksWebp = /\.webp(\?|$)/i.test(doc.thumbnailUrl);
+      return ensureWebp(existing, looksWebp ? 'image/webp' : 'image/jpeg');
     }
   }
 
   if (doc.thumbnailStorageKey) {
     const fromR2 = await getR2ObjectBuffer(doc.category, doc.thumbnailStorageKey);
     if (fromR2?.buffer?.length) {
-      return { buffer: fromR2.buffer, mimeType: fromR2.contentType || 'image/jpeg' };
+      return ensureWebp(fromR2.buffer, fromR2.contentType || 'image/jpeg');
     }
     const localPath = path.join(ASSET_UPLOAD_ROOT, doc.thumbnailStorageKey);
     if (fs.existsSync(localPath)) {
       const buffer = await fs.promises.readFile(localPath);
-      if (buffer.length) return { buffer, mimeType: 'image/jpeg' };
+      if (buffer.length) {
+        return ensureWebp(buffer, 'image/jpeg');
+      }
     }
+  }
+
+  // Image without a dedicated thumb: build one from the main WebP/file.
+  if (isImage) {
+    let imageBuffer = null;
+    const imageKey = resolveR2Key(doc);
+    if (imageKey) {
+      const fromR2 = await getR2ObjectBuffer(doc.category, imageKey);
+      if (fromR2?.buffer?.length) imageBuffer = fromR2.buffer;
+    }
+    if (!imageBuffer?.length && doc.fileUrl) {
+      imageBuffer = await loadFromUrl(doc.fileUrl);
+    }
+    if (!imageBuffer?.length && doc.storedName) {
+      const filePath = path.join(ASSET_UPLOAD_ROOT, doc.storedName);
+      if (fs.existsSync(filePath)) {
+        imageBuffer = await fs.promises.readFile(filePath);
+      }
+    }
+    if (imageBuffer?.length) {
+      const thumb = await toWebpThumbnail(imageBuffer, {
+        originalname: doc.originalName || 'image',
+      });
+      if (thumb?.buffer?.length) {
+        try {
+          await persistWebpThumb(thumb);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[assets] could not persist image thumbnail', err?.message || err);
+        }
+        return { buffer: thumb.buffer, mimeType: 'image/webp' };
+      }
+    }
+  }
+
+  if (!isVideo) {
+    throw new AppError('Thumbnail not found', 404);
   }
 
   // On-demand generate from the video (fixes older uploads / failed ffmpeg on deploy).
@@ -542,41 +646,14 @@ export async function getAssetThumbnailBuffer(id, { role, locationId }) {
     throw new AppError('Could not generate video thumbnail', 404);
   }
 
-  // Persist so the next request is cheap.
   try {
-    if (isR2Configured(doc.category)) {
-      const uploaded = await uploadToR2(
-        {
-          buffer: thumb.buffer,
-          originalname: thumb.originalname,
-          mimetype: thumb.mimetype,
-          size: thumb.size,
-        },
-        {
-          category: doc.category,
-          folder: `${doc.category === 'marketing_assets' ? 'marketing-assets' : 'documents'}/thumbnails`,
-        },
-      );
-      doc.thumbnailUrl = uploaded.fileUrl;
-      doc.thumbnailStorageKey = uploaded.key;
-      await doc.save();
-    } else {
-      const local = await storeFileLocally({
-        buffer: thumb.buffer,
-        originalname: thumb.originalname,
-        mimetype: thumb.mimetype,
-        size: thumb.size,
-      });
-      doc.thumbnailStorageKey = local.storedName;
-      doc.thumbnailUrl = '';
-      await doc.save();
-    }
+    await persistWebpThumb(thumb);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[assets] could not persist generated thumbnail', err?.message || err);
   }
 
-  return { buffer: thumb.buffer, mimeType: 'image/jpeg' };
+  return { buffer: thumb.buffer, mimeType: 'image/webp' };
 }
 
 /** Soft-delete. Does not remove the object from R2. */

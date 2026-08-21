@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { AppError } from '../utils/AppError.js';
+import { toWebpThumbnail } from './imageOptimizeService.js';
 
 const CONVERTIBLE_MIME = new Set([
   'video/mp4',
@@ -55,12 +56,6 @@ function webmFileName(originalName) {
   return `${safe}.webm`;
 }
 
-function thumbFileName(originalName) {
-  const base = path.basename(originalName || 'video', path.extname(originalName || ''));
-  const safe = (base || 'video').replace(/[^\w.\-()+ ]+/g, '_').slice(0, 180);
-  return `${safe}-thumb.jpg`;
-}
-
 function runFfmpeg(args) {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) {
@@ -81,32 +76,27 @@ function runFfmpeg(args) {
 }
 
 /**
- * Grab a single frame near the start for the asset card thumbnail.
+ * Grab a single frame near the start, then convert to WebP for CDN card previews.
  * Soft-fails to null so a bad frame never blocks the video upload.
  */
 async function extractThumbnail(inputPath, originalName) {
-  const thumbPath = path.join(path.dirname(inputPath), `${randomUUID()}.jpg`);
+  const framePath = path.join(path.dirname(inputPath), `${randomUUID()}.jpg`);
   const attempts = [
     // Fast keyframe seek
-    ['-y', '-ss', '0.5', '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', thumbPath],
+    ['-y', '-ss', '0.5', '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', framePath],
     // Accurate decode fallback (some files have no early keyframe)
-    ['-y', '-i', inputPath, '-ss', '1', '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', thumbPath],
-    ['-y', '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', thumbPath],
+    ['-y', '-i', inputPath, '-ss', '1', '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', framePath],
+    ['-y', '-i', inputPath, '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', framePath],
   ];
 
   try {
     for (const args of attempts) {
       try {
         await runFfmpeg(args);
-        const buffer = await fs.readFile(thumbPath);
-        if (buffer.length) {
-          return {
-            buffer,
-            originalname: thumbFileName(originalName),
-            mimetype: 'image/jpeg',
-            size: buffer.length,
-          };
-        }
+        const frame = await fs.readFile(framePath);
+        if (!frame.length) continue;
+        const webp = await toWebpThumbnail(frame, { originalname: originalName || 'video' });
+        if (webp?.buffer?.length) return webp;
       } catch {
         /* try next */
       }
@@ -117,7 +107,7 @@ async function extractThumbnail(inputPath, originalName) {
     console.warn('[video] thumbnail extraction failed', err?.message || err);
     return null;
   } finally {
-    await fs.unlink(thumbPath).catch(() => {});
+    await fs.unlink(framePath).catch(() => {});
   }
 }
 
@@ -140,8 +130,8 @@ export async function extractThumbnailFromVideoBuffer(videoBuffer, originalName 
 
 /**
  * Prepare video for storage:
- * - MP4 / WebM: passthrough (fast) + thumbnail
- * - Other formats: fast VP8 WebM re-encode + thumbnail
+ * - MP4 / WebM: passthrough (fast) + WebP thumbnail
+ * - Other formats: fast VP8 WebM re-encode + WebP thumbnail
  *
  * @param {{ buffer: Buffer; originalname: string; mimetype: string; size: number }} file
  */
