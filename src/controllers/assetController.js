@@ -167,7 +167,7 @@ export const serveAssetThumbnail = asyncHandler(async (req, res) => {
     req.params.id,
     actorFromReq(req),
   );
-  res.setHeader('Content-Type', mimeType || 'image/jpeg');
+  res.setHeader('Content-Type', mimeType || 'image/webp');
   res.setHeader('Cache-Control', 'private, max-age=86400');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.send(buffer);

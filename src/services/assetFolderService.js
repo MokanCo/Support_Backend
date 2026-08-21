@@ -119,13 +119,27 @@ export async function listFolders(actor, { category, parentId = null, allFolders
 
   const rows = await AssetFolder.find(filter).sort({ name: 1 }).lean();
 
+  // One BFS for all listed folders (avoids N+1 collectDescendantIds).
   const videoFolderRoots = new Set();
   if (rows.length) {
     const ownerById = new Map();
-    for (const row of rows) {
-      ownerById.set(String(row._id), String(row._id));
-      const descendants = await collectDescendantIds(row._id, category);
-      for (const id of descendants) ownerById.set(String(id), String(row._id));
+    for (const row of rows) ownerById.set(String(row._id), String(row._id));
+    let frontier = rows.map((r) => r._id);
+    while (frontier.length) {
+      const children = await AssetFolder.find({
+        category,
+        parentId: { $in: frontier },
+        isDeleted: { $ne: true },
+      })
+        .select('_id parentId')
+        .lean();
+      frontier = [];
+      for (const child of children) {
+        const owner = ownerById.get(String(child.parentId));
+        if (!owner) continue;
+        ownerById.set(String(child._id), owner);
+        frontier.push(child._id);
+      }
     }
     const scopedIds = [...ownerById.keys()];
     const videoFolderIds = await Asset.distinct('folderId', {
