@@ -11,6 +11,7 @@ import {
   makeBulkDeleteAssetsHandler,
   makeBulkDownloadAssetsHandler,
   serveAssetFile,
+  serveAssetPreviewUrl,
   serveAssetThumbnail,
   removeAssetLocationHandler,
 } from '../controllers/assetController.js';
@@ -45,6 +46,7 @@ router.post('/bulk-delete', roleMiddleware(['admin']), makeBulkDeleteAssetsHandl
 router.post('/download-zip', roleMiddleware(['admin', 'partner']), makeBulkDownloadAssetsHandler('marketing_assets'));
 
 router.get('/:id', roleMiddleware(['admin', 'partner']), makeCategoryGetHandler('marketing_assets'));
+router.get('/:id/preview-url', roleMiddleware(['admin', 'partner']), serveAssetPreviewUrl);
 router.get('/:id/file', roleMiddleware(['admin', 'partner']), serveAssetFile);
 router.get('/:id/thumbnail', roleMiddleware(['admin', 'partner']), serveAssetThumbnail);
 router.delete(
