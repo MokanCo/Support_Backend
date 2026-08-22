@@ -9,6 +9,7 @@ import {
   isR2Configured,
   uploadFile as uploadToR2,
   getObjectBuffer as getR2ObjectBuffer,
+  getPresignedGetUrl,
   publicUrlForKey,
 } from './cloudflareR2StorageService.js';
 import { maybeConvertImageToWebp, toWebpThumbnail } from './imageOptimizeService.js';
@@ -423,6 +424,34 @@ export async function getAssetFilePath(id, { role, locationId }) {
     'File not found on server. This file was saved on local disk and is not in Cloudflare R2. Re-upload it, or run npm run migrate:assets-to-r2 on the machine that has the file.',
     404,
   );
+}
+
+/**
+ * Short-lived R2 URL for in-browser preview (PDF iframe). Videos are excluded
+ * so the public/CDN object is never handed to the client.
+ */
+export async function getAssetPreviewUrl(id, actor) {
+  const fileInfo = await getAssetFilePath(id, actor);
+  if (String(fileInfo.mimeType || '').startsWith('video/')) {
+    throw new AppError('Preview URL is not available for videos', 403);
+  }
+  const looksPdf =
+    String(fileInfo.mimeType || '').toLowerCase().includes('pdf') ||
+    String(fileInfo.originalName || '').toLowerCase().endsWith('.pdf');
+  const contentType = looksPdf
+    ? 'application/pdf'
+    : fileInfo.mimeType || 'application/octet-stream';
+
+  if (fileInfo.storageKey) {
+    const url = await getPresignedGetUrl(fileInfo.category, fileInfo.storageKey, {
+      contentType,
+      filename: fileInfo.originalName,
+      expiresIn: 300,
+    });
+    if (url) return { url };
+  }
+  if (fileInfo.fileUrl) return { url: fileInfo.fileUrl };
+  throw new AppError('File not found on storage', 404);
 }
 
 /** Load file bytes for zip/download. Returns null if the file cannot be read. */

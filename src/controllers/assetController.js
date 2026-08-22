@@ -1,9 +1,11 @@
 import fs from 'fs';
+import { Readable } from 'node:stream';
 import {
   createAsset,
   listAssets,
   getAssetById,
   getAssetFilePath,
+  getAssetPreviewUrl,
   getAssetThumbnailBuffer,
   removeAsset,
   removeAssetLocation,
@@ -15,7 +17,10 @@ import {
   listAssetArchiveEntries,
   formatArchiveManifest,
 } from '../services/assetArchiveService.js';
-import { getObjectBuffer as getR2ObjectBuffer } from '../services/cloudflareR2StorageService.js';
+import {
+  getObjectStream as getR2ObjectStream,
+  bodyToNodeStream,
+} from '../services/cloudflareR2StorageService.js';
 import * as folderService from '../services/assetFolderService.js';
 import { AppError } from '../utils/AppError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -96,6 +101,19 @@ export const getAssetHandler = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+export const serveAssetPreviewUrl = asyncHandler(async (req, res) => {
+  const result = await getAssetPreviewUrl(req.params.id, actorFromReq(req));
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json(result);
+});
+
+function looksLikePdf(fileInfo) {
+  return (
+    String(fileInfo.mimeType || '').toLowerCase().includes('pdf') ||
+    String(fileInfo.originalName || '').toLowerCase().endsWith('.pdf')
+  );
+}
+
 export const serveAssetFile = asyncHandler(async (req, res) => {
   const actor = actorFromReq(req);
   const fileInfo = await getAssetFilePath(req.params.id, actor);
@@ -105,6 +123,7 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
     req.query.download === 'true' ||
     String(req.query.disposition || '').toLowerCase() === 'attachment';
   const isVideo = String(fileInfo.mimeType || '').startsWith('video/');
+  const looksPdf = looksLikePdf(fileInfo);
 
   // Videos: only admins may request attachment/download. Everyone else can
   // stream inline for playback only (no Content-Disposition: attachment).
@@ -121,35 +140,67 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
       : `${disposition}; filename="${encodedName}"; filename*=UTF-8''${encodedName}`;
 
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Accept-Ranges', 'bytes');
   if (isVideo) {
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   }
 
+  const range = req.headers.range;
+
   if (fileInfo.storageKey) {
-    const fromR2 = await getR2ObjectBuffer(fileInfo.category, fileInfo.storageKey);
-    if (fromR2?.buffer?.length) {
-      res.setHeader('Content-Type', fromR2.contentType || fileInfo.mimeType || 'application/octet-stream');
+    const fromR2 = await getR2ObjectStream(fileInfo.category, fileInfo.storageKey, range);
+    if (fromR2?.body) {
+      const contentType = looksPdf
+        ? 'application/pdf'
+        : fromR2.contentType || fileInfo.mimeType || 'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', contentDisposition);
-      res.send(fromR2.buffer);
+      if (fromR2.contentLength != null) {
+        res.setHeader('Content-Length', String(fromR2.contentLength));
+      }
+      if (range && fromR2.contentRange) {
+        res.status(206);
+        res.setHeader('Content-Range', fromR2.contentRange);
+      }
+      const nodeStream = bodyToNodeStream(fromR2.body);
+      if (!nodeStream) {
+        throw new AppError('File not found on storage', 404);
+      }
+      nodeStream.on('error', () => {
+        if (!res.headersSent) res.status(500);
+        res.end();
+      });
+      nodeStream.pipe(res);
       return;
     }
   }
 
   if (fileInfo.redirect && fileInfo.fileUrl) {
-    // Proxy from R2 public URL when API GetObject is unavailable.
-    const upstream = await fetch(fileInfo.fileUrl);
-    if (!upstream.ok) {
+    // Proxy from R2 public URL when API GetObject is unavailable — still stream.
+    const upstream = await fetch(fileInfo.fileUrl, {
+      headers: range ? { Range: range } : undefined,
+    });
+    if (!upstream.ok && upstream.status !== 206) {
       throw new AppError('File not found on storage', 404);
     }
-    const contentType =
-      upstream.headers.get('content-type') ||
-      fileInfo.mimeType ||
-      'application/octet-stream';
+    const contentType = looksPdf
+      ? 'application/pdf'
+      : upstream.headers.get('content-type') ||
+        fileInfo.mimeType ||
+        'application/octet-stream';
+    res.status(upstream.status);
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', contentDisposition);
-    const buf = Buffer.from(await upstream.arrayBuffer());
-    res.send(buf);
+    const contentRange = upstream.headers.get('content-range');
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+    const contentLength = upstream.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    if (!upstream.body) {
+      res.end();
+      return;
+    }
+    Readable.fromWeb(upstream.body).pipe(res);
     return;
   }
 
@@ -157,7 +208,7 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
     throw new AppError('File not found on storage', 404);
   }
 
-  res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
+  res.setHeader('Content-Type', looksPdf ? 'application/pdf' : fileInfo.mimeType || 'application/octet-stream');
   res.setHeader('Content-Disposition', contentDisposition);
   fs.createReadStream(fileInfo.filePath).pipe(res);
 });
