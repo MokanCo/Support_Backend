@@ -29,8 +29,23 @@ app.use(
   cors({
     origin: frontendOrigins.length === 1 ? frontendOrigins[0] : frontendOrigins,
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Range',
+      'Accept',
+      'If-Range',
+      'If-None-Match',
+    ],
+    exposedHeaders: [
+      'Accept-Ranges',
+      'Content-Range',
+      'Content-Length',
+      'Content-Type',
+      'Content-Disposition',
+      'ETag',
+    ],
   }),
 );
 app.use(express.json({ limit: '1mb' }));
