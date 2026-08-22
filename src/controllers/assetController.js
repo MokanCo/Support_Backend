@@ -141,8 +141,8 @@ export const serveAssetFile = asyncHandler(async (req, res) => {
 
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', isVideo ? 'private, no-store' : 'private, max-age=60');
   if (isVideo) {
-    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   }
 
