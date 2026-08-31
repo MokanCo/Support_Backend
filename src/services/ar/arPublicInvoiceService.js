@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import ArInvoice from '../../models/ArInvoice.js';
+import ArPayment from '../../models/ArPayment.js';
 import ArPaymentSubmission from '../../models/ArPaymentSubmission.js';
 import Location from '../../models/Location.js';
 import ArBillingProfile from '../../models/ArBillingProfile.js';
@@ -87,13 +88,24 @@ function publicStripeMethod(settings) {
  */
 export async function getPublicInvoiceByToken(token) {
   const doc = await loadInvoiceByToken(token);
-  const [location, profile, settings, pendingSubmission] = await Promise.all([
+  const [location, profile, settings, pendingSubmission, pendingStripePayment] = await Promise.all([
     Location.findById(doc.locationId).lean(),
     ArBillingProfile.findOne({ locationId: doc.locationId }).lean(),
     getOrCreateSettings(),
     ArPaymentSubmission.findOne({
       invoiceId: doc._id,
       status: 'pending',
+    })
+      .sort({ createdAt: -1 })
+      .lean(),
+    ArPayment.findOne({
+      invoiceId: doc._id,
+      isDeleted: { $ne: true },
+      paymentStatus: 'pending',
+      $or: [
+        { stripePaymentIntentId: { $nin: [null, ''] } },
+        { stripeCheckoutSessionId: { $nin: [null, ''] } },
+      ],
     })
       .sort({ createdAt: -1 })
       .lean(),
@@ -143,6 +155,15 @@ export async function getPublicInvoiceByToken(token) {
       notes: doc.notes || '',
       isPaid,
       hasPendingSubmission: Boolean(pendingSubmission),
+      pendingStripePayment: pendingStripePayment
+        ? {
+            paymentMethod: pendingStripePayment.paymentMethod,
+            stripePaymentMethodType: pendingStripePayment.stripePaymentMethodType || '',
+            paymentStatus: pendingStripePayment.paymentStatus,
+            amount: pendingStripePayment.amount,
+            createdAt: pendingStripePayment.createdAt,
+          }
+        : null,
       pendingSubmission: pendingSubmission
         ? {
             amount: pendingSubmission.amount,
@@ -199,6 +220,15 @@ export async function getPublicInvoiceByToken(token) {
             enabled: true,
             label: stripe.label || 'Credit / Debit Card',
             fee: quoteStripePayment(balanceDue, 'stripe', doc.currency || 'USD'),
+          }
+        : { enabled: false },
+    // ACH Direct Debit is offered through the same Stripe account as cards.
+    // It is not the settings "ACH / Bank Transfer" instruction method.
+    ach:
+      stripe && process.env.STRIPE_SECRET_KEY
+        ? {
+            enabled: true,
+            label: 'ACH Direct Debit',
           }
         : { enabled: false },
   };

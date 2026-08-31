@@ -475,7 +475,7 @@ export async function refreshInvoiceBalances(invoiceId) {
   const payments = await ArPayment.find({
     invoiceId,
     isDeleted: { $ne: true },
-    paymentStatus: { $nin: ['failed', 'pending'] },
+    paymentStatus: { $nin: ['failed', 'pending', 'canceled'] },
   }).lean();
   const amountPaid = money(payments.reduce((s, p) => s + Number(p.amount), 0));
   doc.amountPaid = amountPaid;

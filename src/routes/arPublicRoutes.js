@@ -43,7 +43,12 @@ router.post(
 router.post(
   '/invoices/:token/stripe-checkout-session',
   asyncHandler(async (req, res) => {
-    res.json(await createPublicCheckoutSession(req.params.token));
+    res.json(
+      await createPublicCheckoutSession(
+        req.params.token,
+        req.body?.paymentMethodType,
+      ),
+    );
   }),
 );
 

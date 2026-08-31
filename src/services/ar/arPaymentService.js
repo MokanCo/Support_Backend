@@ -32,7 +32,9 @@ function formatPayment(doc, { invoiceNumber = '', locationName = '' } = {}) {
     stripeChargeAmount: d.stripeChargeAmount ?? d.amount,
     currency: d.currency || 'USD',
     paymentMethod: d.paymentMethod,
+    stripePaymentMethodType: d.stripePaymentMethodType || '',
     paymentStatus: d.paymentStatus || 'paid',
+    failureReason: d.failureReason || '',
     transactionReference: d.transactionReference,
     stripePaymentIntentId: d.stripePaymentIntentId || '',
     stripeCheckoutSessionId: d.stripeCheckoutSessionId || '',
@@ -50,7 +52,7 @@ export async function listPayments(actor, query) {
   });
   const filter = { isDeleted: { $ne: true }, ...locationScopeFilter(actor, query.locationId) };
   if (query.includeFailed !== 'true') {
-    filter.paymentStatus = { $nin: ['failed', 'pending'] };
+    filter.paymentStatus = { $nin: ['failed', 'pending', 'canceled'] };
   }
   const invoiceId = optionalObjectId(query.invoiceId, 'invoiceId');
   if (invoiceId) filter.invoiceId = invoiceId;
@@ -125,7 +127,9 @@ export async function recordPayment(actor, input, ipAddress = '') {
       input.stripeChargeAmount != null ? money(input.stripeChargeAmount) : amount,
     currency: String(input.currency || invoice.currency || 'USD').toUpperCase(),
     paymentMethod: input.paymentMethod || 'zelle',
+    stripePaymentMethodType: String(input.stripePaymentMethodType || '').trim(),
     paymentStatus,
+    failureReason: String(input.failureReason || '').trim(),
     transactionReference: String(input.transactionReference || '').trim(),
     stripePaymentIntentId: String(input.stripePaymentIntentId || '').trim(),
     stripeCheckoutSessionId: String(input.stripeCheckoutSessionId || '').trim(),
@@ -134,7 +138,7 @@ export async function recordPayment(actor, input, ipAddress = '') {
     recordedBy: actor.id,
   });
 
-  if (paymentStatus === 'failed') {
+  if (paymentStatus === 'failed' || paymentStatus === 'pending' || paymentStatus === 'canceled') {
     const location = await Location.findById(invoice.locationId).lean();
     const formatted = formatPayment(payment, {
       invoiceNumber: invoice.invoiceNumber || '',
