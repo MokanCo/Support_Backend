@@ -34,6 +34,23 @@ const arBillingProfileSchema = new mongoose.Schema(
     lateFeeAmount: { type: Number, default: 0 },
     internalNotes: { type: String, default: '' },
     isDeleted: { type: Boolean, default: false },
+
+    // Saved Stripe ACH Direct Debit bank account — set once via the one-time
+    // "ach-setup-link" flow, then reused for direct off-session charges on
+    // any future invoice (see chargeSavedAch in arStripeService.js).
+    stripeCustomerId: { type: String, default: '' },
+    achStatus: {
+      type: String,
+      enum: ['none', 'pending_verification', 'active', 'failed', 'revoked'],
+      default: 'none',
+    },
+    achPaymentMethodId: { type: String, default: '' },
+    achMandateId: { type: String, default: '' },
+    achBankName: { type: String, default: '' },
+    achBankLast4: { type: String, default: '' },
+    achAuthorizedAt: { type: Date, default: null },
+    achSetupToken: { type: String, default: null, index: { unique: true, sparse: true } },
+    achSetupTokenCreatedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

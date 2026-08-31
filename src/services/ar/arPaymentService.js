@@ -165,6 +165,11 @@ export async function recordPayment(actor, input, ipAddress = '') {
     location,
     profile,
     kind: 'receipt',
+    paymentMethod: payment.paymentMethod,
+    achBank:
+      payment.stripePaymentMethodType === 'ach'
+        ? { bankName: profile?.achBankName || '', last4: profile?.achBankLast4 || '' }
+        : null,
   });
 
   const formatted = formatPayment(payment, {

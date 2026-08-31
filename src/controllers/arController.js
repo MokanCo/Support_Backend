@@ -3,6 +3,7 @@ import * as settingsService from '../services/ar/arSettingsService.js';
 import * as productService from '../services/ar/arProductService.js';
 import * as billingService from '../services/ar/arBillingProfileService.js';
 import * as invoiceService from '../services/ar/arInvoiceService.js';
+import * as stripeService from '../services/ar/arStripeService.js';
 import * as paymentService from '../services/ar/arPaymentService.js';
 import * as paymentSubmissionService from '../services/ar/arPaymentSubmissionService.js';
 import * as creditService from '../services/ar/arCreditService.js';
@@ -119,6 +120,12 @@ export const upsertBillingProfile = asyncHandler(async (req, res) => {
   );
 });
 
+export const createAchSetupLink = asyncHandler(async (req, res) => {
+  res.json(
+    await billingService.createAchSetupLink(actor(req), req.params.locationId, ip(req)),
+  );
+});
+
 export const listInvoices = asyncHandler(async (req, res) => {
   res.json(await invoiceService.listInvoices(actor(req), req.query));
 });
@@ -145,6 +152,10 @@ export const sendInvoice = asyncHandler(async (req, res) => {
 
 export const viewInvoice = asyncHandler(async (req, res) => {
   res.json(await invoiceService.markInvoiceViewed(actor(req), req.params.id));
+});
+
+export const chargeSavedAch = asyncHandler(async (req, res) => {
+  res.json(await stripeService.chargeSavedAch(actor(req), req.params.id, ip(req)));
 });
 
 export const duplicateInvoice = asyncHandler(async (req, res) => {

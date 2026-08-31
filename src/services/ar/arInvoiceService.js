@@ -92,7 +92,22 @@ function pushTimeline(invoice, event) {
   });
 }
 
-function formatInvoice(doc, locationName = '') {
+/** Most recent non-final ACH direct-debit attempt against this invoice, if
+ *  any — surfaced to the UI as "ACH processing" / "ACH failed" so admins and
+ *  the customer-facing page can reflect a saved-bank-account charge that's
+ *  still settling asynchronously via webhook. */
+function formatAchCharge(payment) {
+  if (!payment) return null;
+  if (payment.paymentStatus !== 'pending' && payment.paymentStatus !== 'failed') return null;
+  return {
+    status: payment.paymentStatus === 'pending' ? 'processing' : 'failed',
+    amount: payment.amount,
+    initiatedAt: payment.createdAt,
+    failureReason: payment.failureReason || '',
+  };
+}
+
+function formatInvoice(doc, locationName = '', achPayment = null) {
   const d = doc.toObject ? doc.toObject() : doc;
   return {
     id: String(d._id),
@@ -126,9 +141,30 @@ function formatInvoice(doc, locationName = '') {
     viewedAt: d.viewedAt,
     paidAt: d.paidAt,
     scheduledSendAt: d.scheduledSendAt,
+    achCharge: formatAchCharge(achPayment),
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
   };
+}
+
+/** Batch-loads the latest ach payment per invoice id — avoids N+1 queries
+ *  when formatting a list of invoices. */
+async function loadAchChargesByInvoice(invoiceIds) {
+  if (!invoiceIds.length) return new Map();
+  const payments = await ArPayment.find({
+    invoiceId: { $in: invoiceIds },
+    isDeleted: { $ne: true },
+    stripePaymentMethodType: 'ach',
+    paymentStatus: { $in: ['pending', 'failed'] },
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+  const map = new Map();
+  for (const p of payments) {
+    const key = String(p.invoiceId);
+    if (!map.has(key)) map.set(key, p);
+  }
+  return map;
 }
 
 export async function nextInvoiceNumber() {
@@ -168,11 +204,16 @@ export async function listInvoices(actor, query) {
   ]);
 
   const locIds = [...new Set(items.map((i) => String(i.locationId)))];
-  const locs = await Location.find({ _id: { $in: locIds } }).lean();
+  const [locs, achByInvoice] = await Promise.all([
+    Location.find({ _id: { $in: locIds } }).lean(),
+    loadAchChargesByInvoice(items.map((i) => i._id)),
+  ]);
   const locMap = new Map(locs.map((l) => [String(l._id), l.name]));
 
   return {
-    invoices: items.map((i) => formatInvoice(i, locMap.get(String(i.locationId)) || '')),
+    invoices: items.map((i) =>
+      formatInvoice(i, locMap.get(String(i.locationId)) || '', achByInvoice.get(String(i._id))),
+    ),
     total,
     page,
     pageSize,
@@ -193,8 +234,13 @@ export async function getInvoice(actor, id) {
   ) {
     await ensurePublicPaymentToken(doc);
   }
-  const location = await Location.findById(doc.locationId).lean();
-  return { invoice: formatInvoice(doc, location?.name || '') };
+  const [location, achByInvoice] = await Promise.all([
+    Location.findById(doc.locationId).lean(),
+    loadAchChargesByInvoice([doc._id]),
+  ]);
+  return {
+    invoice: formatInvoice(doc, location?.name || '', achByInvoice.get(String(doc._id))),
+  };
 }
 
 export async function createInvoice(actor, input, ipAddress = '') {

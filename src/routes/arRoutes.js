@@ -296,6 +296,11 @@ router.get('/billing-profiles', ar.listBillingProfiles);
  */
 router.get('/billing-profiles/:locationId', ar.getBillingProfile);
 router.put('/billing-profiles/:locationId', roleMiddleware(['admin']), ar.upsertBillingProfile);
+router.post(
+  '/billing-profiles/:locationId/ach-setup-link',
+  roleMiddleware(['admin']),
+  ar.createAchSetupLink,
+);
 
 /**
  * @swagger
@@ -477,6 +482,11 @@ router.post('/invoices/:id/send', roleMiddleware(['admin']), ar.sendInvoice);
  *         description: Viewed
  */
 router.post('/invoices/:id/view', ar.viewInvoice);
+router.post(
+  '/invoices/:id/charge-saved-ach',
+  roleMiddleware(['admin']),
+  ar.chargeSavedAch,
+);
 
 /**
  * @swagger

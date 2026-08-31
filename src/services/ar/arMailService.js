@@ -169,25 +169,47 @@ function summaryRowsHtml(rows) {
  * statement). Split out from sendInvoiceEmail so it can be previewed/tested
  * without needing a mail transport.
  */
-export function buildInvoiceEmailContent({ invoice, location, profile, kind = 'sent', publicToken, settings }) {
+export function buildInvoiceEmailContent({
+  invoice,
+  location,
+  profile,
+  kind = 'sent',
+  publicToken,
+  settings,
+  paymentMethod = '',
+  achBank = null,
+}) {
   const meta = KIND_META[kind] || KIND_META.sent;
   const companyName = settings.companyName || 'Mokanco';
+  const isAchReceipt = kind === 'receipt' && paymentMethod === 'ach';
 
   const subjects = {
     sent: `Your Invoice is Ready — ${invoice.invoiceNumber}`,
     reminder: `Reminder: Invoice ${invoice.invoiceNumber} due ${formatDate(invoice.dueDate)}`,
     overdue: `Overdue: Invoice ${invoice.invoiceNumber}`,
     late_fee: `Late fee applied to Invoice ${invoice.invoiceNumber}`,
-    receipt: `Payment received for Invoice ${invoice.invoiceNumber}`,
+    receipt: isAchReceipt
+      ? `Bank payment received for Invoice ${invoice.invoiceNumber}`
+      : `Payment received for Invoice ${invoice.invoiceNumber}`,
     statement: `Account statement — ${location?.name || 'your account'}`,
   };
   const subject = subjects[kind] || subjects.sent;
 
   const amountDue = Number(invoice.balanceDue ?? invoice.total ?? 0);
+  // A receipt is a settled-payment confirmation, not a payment prompt — never
+  // show Pay Now / other payment options on it (an ACH-charged invoice in
+  // particular was never sent to the customer to pay in the first place).
   const payLink =
-    shouldShowPayNow(kind) && publicToken ? publicInvoicePayUrl(publicToken) : '';
+    shouldShowPayNow(kind) && !isAchReceipt && publicToken
+      ? publicInvoicePayUrl(publicToken)
+      : '';
   const greetingName = location?.name || profile?.billingContactName || 'there';
   const rows = summaryRows(invoice);
+  const achLine = isAchReceipt
+    ? `Paid via ACH Direct Debit${achBank?.bankName ? ` — ${achBank.bankName}` : ''}${
+        achBank?.last4 ? ` (account ending in ${achBank.last4})` : ''
+      }`
+    : '';
 
   // ---------------------------------------------------------------- text --
   const textLines = [
@@ -200,6 +222,7 @@ export function buildInvoiceEmailContent({ invoice, location, profile, kind = 's
     `Invoice: #${invoice.invoiceNumber}`,
     `Invoice date: ${formatDate(invoice.invoiceDate)}`,
     `Due date: ${formatDate(invoice.dueDate)}`,
+    achLine,
     itemsTableText(invoice.items),
     ...rows.map((r) => `${r.label}: ${r.value < 0 ? '-' : ''}${money(Math.abs(r.value))}`),
     '',
@@ -269,6 +292,17 @@ export function buildInvoiceEmailContent({ invoice, location, profile, kind = 's
       </tr>`
     : '';
 
+  const achBlock = achLine
+    ? `<tr>
+        <td style="padding:20px 28px 0;">
+          <div style="display:flex;align-items:center;gap:10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:12px 14px;">
+            <span style="display:inline-block;padding:3px 8px;border-radius:999px;background:#0369a1;color:#ffffff;font-size:10px;font-weight:700;letter-spacing:0.06em;">ACH</span>
+            <span style="color:#0c4a6e;font-size:13px;font-weight:600;">${escapeHtml(achLine)}</span>
+          </div>
+        </td>
+      </tr>`
+    : '';
+
   const footerContactParts = [
     settings.supportEmail ? `Support: ${escapeHtml(settings.supportEmail)}` : '',
     settings.companyPhone ? escapeHtml(settings.companyPhone) : '',
@@ -300,6 +334,8 @@ export function buildInvoiceEmailContent({ invoice, location, profile, kind = 's
         </tr>
 
         ${billToBlock}
+
+        ${achBlock}
 
         <tr>
           <td style="padding:20px 28px 0;">
@@ -352,11 +388,108 @@ export function buildInvoiceEmailContent({ invoice, location, profile, kind = 's
 }
 
 /**
+ * One-time "authorize automatic ACH billing" link — not tied to any invoice.
+ * Deliberately a much lighter template than buildInvoiceEmailContent since
+ * there's no amount, items, or due date to show yet.
+ */
+export async function sendAchSetupEmail({ location, profile, url }) {
+  const settings = await getOrCreateSettings();
+  const toList = await recipientsForProfile(profile, location);
+  if (!toList.length) return false;
+
+  const companyName = settings.companyName || 'Mokanco';
+  const greetingName = location?.name || 'there';
+  const subject = `Set up automatic bank payments — ${companyName}`;
+
+  const text = [
+    `Hi ${greetingName},`,
+    '',
+    `${companyName} would like to set up automatic ACH bank payments for your account.`,
+    'Follow the link below to securely link your bank account and authorize future invoices',
+    'to be debited directly — no further action will be needed from you afterward.',
+    '',
+    `LINK YOUR BANK ACCOUNT: ${url}`,
+    '',
+    `Questions? Contact us${settings.supportEmail ? ` at ${settings.supportEmail}` : ''}.`,
+    '',
+    `— ${companyName}`,
+  ].join('\n');
+
+  const logo = settings.logoUrl
+    ? `<img src="${escapeHtml(settings.logoUrl)}" alt="${escapeHtml(companyName)}" height="28" style="display:block;margin:0 auto 8px;max-height:28px;" />`
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>${escapeHtml(subject)}</title></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:32px 12px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
+        <tr>
+          <td style="background:#f0f9ff;border-bottom:1px solid #bae6fd;padding:28px 28px 22px;text-align:center;">
+            ${logo}
+            <div style="font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#0369a1;">${escapeHtml(companyName)}</div>
+            <h1 style="margin:10px 0 0;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">Set Up Automatic Bank Payments</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:22px 28px 0;color:#334155;font-size:14px;line-height:1.6;">
+            Hi <strong style="color:#0f172a;">${escapeHtml(greetingName)}</strong>,<br />
+            ${escapeHtml(companyName)} would like to set up automatic ACH bank payments for your account.
+            Link your bank account below and authorize future invoices to be debited directly —
+            no further action will be needed from you afterward.
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding:28px 28px 8px;">
+            <a href="${escapeHtml(url)}" style="display:inline-block;background:#0369a1;color:#ffffff;font-weight:700;font-size:15px;letter-spacing:0.02em;padding:14px 40px;border-radius:8px;text-decoration:none;box-shadow:0 2px 8px rgba(15,23,42,0.15);">LINK BANK ACCOUNT</a>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding:0 28px 20px;color:#94a3b8;font-size:12px;">
+            This is not instant — ACH transfers typically take 3–5 business days to settle once charged.
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 28px 24px;border-top:1px solid #f1f5f9;text-align:center;">
+            <p style="margin:0;color:#94a3b8;font-size:12px;">
+              ${settings.supportEmail ? `Support: ${escapeHtml(settings.supportEmail)}<br />` : ''}
+              — ${escapeHtml(companyName)}
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  try {
+    await dispatchEmail({ to: toList, subject, text, html });
+    return true;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[arMail] ach setup send failed', e?.message || e);
+    return false;
+  }
+}
+
+/**
  * Invoice emails: branded summary + itemized breakdown + PAY NOW → public
  * invoice URL. Detailed Zelle/card instructions and QR live on the public
  * page only.
  */
-export async function sendInvoiceEmail({ invoice, location, profile, kind = 'sent', publicToken }) {
+export async function sendInvoiceEmail({
+  invoice,
+  location,
+  profile,
+  kind = 'sent',
+  publicToken,
+  paymentMethod = '',
+  achBank = null,
+}) {
   const settings = await getOrCreateSettings();
   const toList = await recipientsForProfile(profile, location);
   if (!toList.length) return false;
@@ -368,6 +501,8 @@ export async function sendInvoiceEmail({ invoice, location, profile, kind = 'sen
     kind,
     publicToken,
     settings,
+    paymentMethod,
+    achBank,
   });
 
   try {

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import ArBillingProfile from '../../models/ArBillingProfile.js';
 import Location from '../../models/Location.js';
 import { AppError } from '../../utils/AppError.js';
@@ -10,6 +11,18 @@ import {
 } from './arAccess.js';
 import { writeArAudit } from './arAuditService.js';
 import { getOrCreateSettings } from './arSettingsService.js';
+import { sendAchSetupEmail } from './arMailService.js';
+
+function formatAchPaymentMethod(d) {
+  if (!d.achStatus || d.achStatus === 'none') return null;
+  return {
+    status: d.achStatus,
+    bankName: d.achBankName || '',
+    last4: d.achBankLast4 || '',
+    mandateId: d.achMandateId || '',
+    authorizedAt: d.achAuthorizedAt || null,
+  };
+}
 
 function formatProfile(doc, location = null) {
   const d = doc.toObject ? doc.toObject() : doc;
@@ -33,6 +46,7 @@ function formatProfile(doc, location = null) {
     lateFeeType: d.lateFeeType,
     lateFeeAmount: d.lateFeeAmount,
     internalNotes: d.internalNotes,
+    achPaymentMethod: formatAchPaymentMethod(d),
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
   };
@@ -93,6 +107,7 @@ export async function listBillingProfiles(actor, query) {
         lateFeeType: settings.lateFeeType,
         lateFeeAmount: settings.lateFeeAmount,
         internalNotes: '',
+        achPaymentMethod: null,
         createdAt: null,
         updatedAt: null,
       };
@@ -186,4 +201,66 @@ export async function upsertBillingProfile(actor, locationId, patch, ipAddress =
   });
 
   return { profile: formatProfile(doc, location) };
+}
+
+function generateAchSetupToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function achSetupUrl(token) {
+  const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+  return base ? `${base}/ach-setup?token=${encodeURIComponent(token)}` : '';
+}
+
+/**
+ * Creates (or reuses) a one-time link for the customer to link/authorize a
+ * bank account for automatic ACH billing — independent of any invoice. Does
+ * not touch Stripe itself; that happens when the customer opens the link
+ * (see arPublicAchSetupService.js).
+ */
+export async function createAchSetupLink(actor, locationId, ipAddress = '') {
+  assertCanManageAr(actor);
+  const location = await Location.findById(locationId).lean();
+  if (!location) throw new AppError('Location not found', 404);
+
+  let doc = await ArBillingProfile.findOne({ locationId, isDeleted: { $ne: true } });
+  if (!doc) doc = new ArBillingProfile({ locationId });
+
+  const recipientEmail = String(
+    doc.billingEmail || doc.secondaryBillingEmail || location.email || '',
+  ).trim();
+  if (!recipientEmail) {
+    throw new AppError(
+      'This customer has no billing email on file — add one before sending an ACH setup link',
+      400,
+    );
+  }
+
+  doc.achSetupToken = generateAchSetupToken();
+  doc.achSetupTokenCreatedAt = new Date();
+  await doc.save();
+
+  const url = achSetupUrl(doc.achSetupToken);
+  if (!url) {
+    throw new AppError('APP_URL / FRONTEND_URL is not configured on the server', 500);
+  }
+
+  const sent = await sendAchSetupEmail({ location, profile: doc, url });
+  if (!sent) {
+    throw new AppError(
+      "The setup link was created but the email could not be sent — check the server's mail configuration",
+      502,
+    );
+  }
+
+  await writeArAudit({
+    entityType: 'billing_profile',
+    entityId: String(doc._id),
+    action: 'ach_setup_link_sent',
+    description: `ACH setup link emailed to ${recipientEmail} for ${location.name}`,
+    actor,
+    ipAddress,
+  });
+
+  return { emailedTo: recipientEmail };
 }

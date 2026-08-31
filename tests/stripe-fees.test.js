@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  calculateAchFee,
   calculateStripeGrossUp,
   centsToDollars,
   dollarsToCents,
   estimatedStripeDeductionCents,
+  getAchFeeConfig,
   getStripeFeeConfig,
   quoteStripePayment,
 } from '../src/config/stripeFees.js';
@@ -12,6 +14,11 @@ import {
 const CONFIG = getStripeFeeConfig({
   STRIPE_FEE_PERCENT: '2.9',
   STRIPE_FEE_FIXED_CENTS: '30',
+});
+
+const ACH_CONFIG = getAchFeeConfig({
+  STRIPE_ACH_FEE_PERCENT: '0.8',
+  STRIPE_ACH_FEE_CAP_CENTS: '500',
 });
 
 function assertNetEqualsOriginal(invoiceDollars) {
@@ -104,10 +111,10 @@ describe('gross-up formula (Stripe selected)', () => {
   });
 });
 
-describe('non-Stripe payment selected', () => {
-  for (const method of ['zelle', 'ach', 'wire', 'check']) {
-    it(`${method} does not add a Stripe fee`, () => {
-      const q = quoteStripePayment(100, method, 'USD', CONFIG);
+describe('manual payment methods (no Stripe involvement)', () => {
+  for (const method of ['zelle', 'wire', 'check']) {
+    it(`${method} does not add a fee`, () => {
+      const q = quoteStripePayment(100, method, 'USD');
       assert.equal(q.stripeFeeCents, 0);
       assert.equal(q.stripeChargeAmountCents, 10000);
       assert.equal(q.stripeProcessingFee, 0);
@@ -115,6 +122,53 @@ describe('non-Stripe payment selected', () => {
       assert.equal(q.paymentMethod, method);
     });
   }
+});
+
+describe('ACH fee (Stripe\'s capped-percentage pricing, 0.8% capped at $5)', () => {
+  it('reads percent and cap cents from env', () => {
+    const cfg = getAchFeeConfig({
+      STRIPE_ACH_FEE_PERCENT: '1.2',
+      STRIPE_ACH_FEE_CAP_CENTS: '750',
+    });
+    assert.equal(cfg.percent, 1.2);
+    assert.equal(cfg.percentRate, 0.012);
+    assert.equal(cfg.capCents, 750);
+  });
+
+  it('defaults to 0.8% capped at $5', () => {
+    const cfg = getAchFeeConfig({});
+    assert.equal(cfg.percent, 0.8);
+    assert.equal(cfg.capCents, 500);
+  });
+
+  it('$100 invoice → 0.8% fee, well under the cap', () => {
+    const q = quoteStripePayment(100, 'ach', 'USD', ACH_CONFIG);
+    assert.equal(q.invoiceAmountCents, 10000);
+    assert.equal(q.stripeFeeCents, 80);
+    assert.equal(q.stripeChargeAmountCents, 10080);
+    assert.equal(q.originalAmount, 100);
+    assert.equal(q.stripeProcessingFee, 0.8);
+    assert.equal(q.stripeChargeAmount, 100.8);
+    assert.equal(q.paymentMethod, 'ach');
+  });
+
+  it('$10,000 invoice → fee capped at $5, not 0.8% ($80)', () => {
+    const q = quoteStripePayment(10000, 'ach', 'USD', ACH_CONFIG);
+    assert.equal(q.stripeFeeCents, 500);
+    assert.equal(q.stripeChargeAmountCents, 1000500);
+    assert.equal(q.stripeChargeAmount, 10005);
+  });
+
+  it('$0.00 yields a zero quote', () => {
+    const q = quoteStripePayment(0, 'ach', 'USD', ACH_CONFIG);
+    assert.equal(q.stripeChargeAmountCents, 0);
+    assert.equal(q.stripeFeeCents, 0);
+  });
+
+  it('calculateAchFee never exceeds the cap regardless of amount', () => {
+    const huge = calculateAchFee(dollarsToCents(1_000_000), ACH_CONFIG);
+    assert.equal(huge.stripeFeeCents, ACH_CONFIG.capCents);
+  });
 });
 
 describe('very small invoice amounts', () => {

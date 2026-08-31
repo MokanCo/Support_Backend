@@ -29,6 +29,27 @@ export function getStripeFeeConfig(env = process.env) {
   return { percent, percentRate, fixedFeeCents };
 }
 
+/**
+ * ACH Direct Debit uses Stripe's own pricing model (a small percentage
+ * capped per transaction), not the card gross-up formula — 0.8% capped at $5
+ * by default, matching Stripe's standard ACH debit pricing.
+ *
+ *   STRIPE_ACH_FEE_PERCENT     percent points, e.g. 0.8 for 0.8%
+ *   STRIPE_ACH_FEE_CAP_CENTS   cap in the smallest currency unit (500 = $5.00)
+ */
+export function getAchFeeConfig(env = process.env) {
+  const percent = parseNumber(env.STRIPE_ACH_FEE_PERCENT, 0.8);
+  const capCents = Math.round(parseNumber(env.STRIPE_ACH_FEE_CAP_CENTS, 500));
+  const percentRate = percent / 100;
+  if (percentRate < 0 || percentRate >= 1) {
+    throw new Error(`STRIPE_ACH_FEE_PERCENT must be between 0 and 100 (got ${percent})`);
+  }
+  if (capCents < 0) {
+    throw new Error('STRIPE_ACH_FEE_CAP_CENTS must be >= 0');
+  }
+  return { percent, percentRate, capCents };
+}
+
 export function dollarsToCents(amount) {
   return Math.round((Number(amount) || 0) * 100);
 }
@@ -72,24 +93,50 @@ export function estimatedStripeDeductionCents(chargeCents, config = getStripeFee
   return Math.round(charge * config.percentRate) + config.fixedFeeCents;
 }
 
+/** ACH's capped-percentage fee, simply added on top (never a gross-up —
+ *  the cap means the card formula's inverse-solve doesn't apply). */
+export function calculateAchFee(invoiceAmountCents, config = getAchFeeConfig()) {
+  const original = Math.max(0, Math.round(Number(invoiceAmountCents) || 0));
+  if (original <= 0) {
+    return {
+      invoiceAmountCents: 0,
+      stripeFeeCents: 0,
+      stripeChargeAmountCents: 0,
+      percent: config.percent,
+      capCents: config.capCents,
+    };
+  }
+  const fee = Math.min(Math.round(original * config.percentRate), config.capCents);
+  return {
+    invoiceAmountCents: original,
+    stripeFeeCents: fee,
+    stripeChargeAmountCents: original + fee,
+    percent: config.percent,
+    capCents: config.capCents,
+  };
+}
+
 export function quoteStripePayment(
   invoiceAmount,
   paymentMethod = 'stripe',
   currency = 'USD',
-  config = getStripeFeeConfig(),
+  config = null,
 ) {
   const invoiceAmountCents = dollarsToCents(invoiceAmount);
   const method = String(paymentMethod || '').toLowerCase();
   const isStripe = method === 'stripe';
+  const isAch = method === 'ach';
   const calc = isStripe
-    ? calculateStripeGrossUp(invoiceAmountCents, config)
-    : {
-        invoiceAmountCents,
-        stripeFeeCents: 0,
-        stripeChargeAmountCents: invoiceAmountCents,
-        percent: config.percent,
-        fixedFeeCents: config.fixedFeeCents,
-      };
+    ? calculateStripeGrossUp(invoiceAmountCents, config || getStripeFeeConfig())
+    : isAch
+      ? calculateAchFee(invoiceAmountCents, config || getAchFeeConfig())
+      : {
+          invoiceAmountCents,
+          stripeFeeCents: 0,
+          stripeChargeAmountCents: invoiceAmountCents,
+          percent: 0,
+          fixedFeeCents: 0,
+        };
 
   return {
     invoiceAmountCents: calc.invoiceAmountCents,
@@ -99,8 +146,9 @@ export function quoteStripePayment(
     stripeProcessingFee: centsToDollars(calc.stripeFeeCents),
     stripeChargeAmount: centsToDollars(calc.stripeChargeAmountCents),
     currency: String(currency || 'USD').toUpperCase(),
-    paymentMethod: isStripe ? 'stripe' : method || 'other',
+    paymentMethod: isStripe ? 'stripe' : isAch ? 'ach' : method || 'other',
     percent: calc.percent,
-    fixedFeeCents: calc.fixedFeeCents,
+    fixedFeeCents: calc.fixedFeeCents ?? 0,
+    capCents: calc.capCents,
   };
 }

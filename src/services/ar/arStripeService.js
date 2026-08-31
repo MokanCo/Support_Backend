@@ -4,10 +4,11 @@ import ArInvoice from '../../models/ArInvoice.js';
 import Location from '../../models/Location.js';
 import ArBillingProfile from '../../models/ArBillingProfile.js';
 import { AppError } from '../../utils/AppError.js';
-import { money } from './arAccess.js';
+import { money, assertCanManageAr } from './arAccess.js';
 import { loadInvoiceByToken, publicInvoicePayUrl } from './arPublicInvoiceService.js';
 import { recordPayment } from './arPaymentService.js';
 import { sendInvoiceEmail } from './arMailService.js';
+import { writeArAudit } from './arAuditService.js';
 import {
   centsToDollars,
   dollarsToCents,
@@ -16,7 +17,7 @@ import {
 
 let stripeClient = null;
 
-function getStripeClient() {
+export function getStripeClient() {
   if (!process.env.STRIPE_SECRET_KEY) {
     throw new AppError('Stripe is not configured', 503);
   }
@@ -97,8 +98,8 @@ async function findPendingStripePayment(invoiceId) {
  * invoice in the database — never from a client-supplied total.
  *
  * `paymentMethodType` is the only client input that is used:
- *   - omitted / "card" → existing card Checkout (unchanged)
- *   - "ach" → US bank account / ACH Direct Debit Checkout (no card fee)
+ *   - omitted / "card" → existing card Checkout (2.9% + $0.30 gross-up)
+ *   - "ach" → US bank account / ACH Direct Debit Checkout (0.8% capped at $5)
  *
  * The invoice is only marked paid once Stripe confirms payment via
  * webhook (see handleStripeWebhookEvent) — never on this call, and never
@@ -140,11 +141,11 @@ export async function createPublicCheckoutSession(token, paymentMethodType = 'ca
       quantity: 1,
     },
   ];
-  if (!isAch && quote.stripeFeeCents > 0) {
+  if (quote.stripeFeeCents > 0) {
     lineItems.push({
       price_data: {
         currency,
-        product_data: { name: 'Card processing fee' },
+        product_data: { name: isAch ? 'ACH processing fee' : 'Card processing fee' },
         unit_amount: quote.stripeFeeCents,
       },
       quantity: 1,
@@ -189,6 +190,149 @@ export async function createPublicCheckoutSession(token, paymentMethodType = 'ca
     paymentMethod: isAch ? 'ach' : 'stripe',
     paymentMethodType: methodType,
   };
+}
+
+/**
+ * Charges a customer's already-linked ACH bank account directly — no
+ * checkout link, no customer action. Requires the billing profile to have
+ * an `active` saved bank account (see the ach-setup-link flow). The
+ * resulting PaymentIntent carries the same metadata shape as the Checkout
+ * flow, so the existing webhook pipeline (processStripeEvent) picks up its
+ * eventual success/failure exactly like any other Stripe ACH payment — the
+ * pending record created here just lets the UI show "ACH processing"
+ * immediately instead of waiting on the webhook round-trip.
+ */
+export async function chargeSavedAch(actor, invoiceId, ipAddress = '') {
+  assertCanManageAr(actor);
+  const stripe = getStripeClient();
+
+  const invoice = await ArInvoice.findOne({ _id: invoiceId, isDeleted: { $ne: true } });
+  if (!invoice) throw new AppError('Invoice not found', 404);
+  if (['draft', 'cancelled', 'void', 'paid'].includes(invoice.status)) {
+    throw new AppError('This invoice cannot be charged', 409);
+  }
+  if (money(invoice.balanceDue) <= 0) {
+    throw new AppError('This invoice is already paid', 409);
+  }
+
+  const profile = await ArBillingProfile.findOne({
+    locationId: invoice.locationId,
+    isDeleted: { $ne: true },
+  });
+  if (
+    !profile ||
+    profile.achStatus !== 'active' ||
+    !profile.stripeCustomerId ||
+    !profile.achPaymentMethodId ||
+    !profile.achMandateId
+  ) {
+    throw new AppError('No active ACH bank account on file for this customer', 409);
+  }
+
+  const pending = await findPendingStripePayment(invoice._id);
+  if (pending) {
+    throw new AppError(
+      'A bank payment is already processing for this invoice. Please wait for it to settle before charging again.',
+      409,
+    );
+  }
+
+  const quote = stripeFeeQuoteForInvoice(invoice, 'ach');
+  if (quote.invoiceAmountCents <= 0) {
+    throw new AppError('This invoice is already paid', 409);
+  }
+
+  const metadata = sessionMetadata(invoice, null, quote, 'ach');
+
+  const paymentIntent = await stripe.paymentIntents.create(
+    {
+      amount: quote.stripeChargeAmountCents,
+      currency: quote.currency.toLowerCase(),
+      customer: profile.stripeCustomerId,
+      payment_method: profile.achPaymentMethodId,
+      payment_method_types: ['us_bank_account'],
+      mandate: profile.achMandateId,
+      off_session: true,
+      confirm: true,
+      metadata,
+    },
+    { idempotencyKey: `ar-ach-direct-${String(invoice._id)}` },
+  );
+
+  await recordPayment(
+    actor,
+    {
+      invoiceId: String(invoice._id),
+      amount: quote.originalAmount,
+      originalAmount: quote.originalAmount,
+      stripeProcessingFee: quote.stripeProcessingFee,
+      stripeChargeAmount: quote.stripeChargeAmount,
+      currency: quote.currency,
+      paymentMethod: 'ach',
+      stripePaymentMethodType: 'ach',
+      paymentStatus: 'pending',
+      transactionReference: paymentIntent.id,
+      stripePaymentIntentId: paymentIntent.id,
+      notes:
+        'Stripe ACH Direct Debit charged directly against the saved bank account — awaiting bank settlement',
+    },
+    ipAddress,
+  );
+
+  await writeArAudit({
+    entityType: 'invoice',
+    entityId: String(invoice._id),
+    action: 'ach_direct_charge_initiated',
+    description: `ACH direct debit of $${quote.stripeChargeAmount} initiated for ${invoice.invoiceNumber}`,
+    actor,
+    ipAddress,
+  });
+
+  const { getInvoice } = await import('./arInvoiceService.js');
+  return getInvoice(actor, String(invoice._id));
+}
+
+/**
+ * Finalizes the one-time ACH bank-linking flow once Stripe confirms the
+ * SetupIntent — saves the payment method/mandate onto the billing profile so
+ * chargeSavedAch can debit it later with no further customer action.
+ */
+async function finalizeAchSetup(setupIntentObj = {}) {
+  const locationId = setupIntentObj.metadata?.locationId;
+  if (!locationId) return { handled: false };
+
+  const profile = await ArBillingProfile.findOne({
+    locationId,
+    isDeleted: { $ne: true },
+  });
+  if (!profile) return { handled: false };
+
+  const paymentMethodId =
+    typeof setupIntentObj.payment_method === 'string'
+      ? setupIntentObj.payment_method
+      : setupIntentObj.payment_method?.id;
+  if (!paymentMethodId) return { handled: false };
+
+  const stripe = getStripeClient();
+  const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+  const bank = pm.us_bank_account || {};
+
+  profile.stripeCustomerId =
+    (typeof setupIntentObj.customer === 'string'
+      ? setupIntentObj.customer
+      : setupIntentObj.customer?.id) || profile.stripeCustomerId;
+  profile.achPaymentMethodId = paymentMethodId;
+  profile.achMandateId =
+    (typeof setupIntentObj.mandate === 'string'
+      ? setupIntentObj.mandate
+      : setupIntentObj.mandate?.id) || '';
+  profile.achBankName = bank.bank_name || '';
+  profile.achBankLast4 = bank.last4 || '';
+  profile.achStatus = 'active';
+  profile.achAuthorizedAt = new Date();
+  await profile.save();
+
+  return { handled: true };
 }
 
 async function findExistingStripePayment({ checkoutSessionId, paymentIntentId }) {
@@ -407,6 +551,7 @@ const defaultStore = {
     return refreshInvoiceBalances(invoiceId);
   },
   sendReceipt: sendPaidReceipt,
+  finalizeSetup: finalizeAchSetup,
 };
 
 function applyIdsToExisting(existing, ids, amounts, paymentStatus, notes) {
@@ -438,6 +583,10 @@ function applyIdsToExisting(existing, ids, amounts, paymentStatus, notes) {
 export async function processStripeEvent(event, store = defaultStore) {
   const db = { ...defaultStore, ...store };
   if (!event?.type) return { handled: false };
+
+  if (event.type === 'setup_intent.succeeded') {
+    return db.finalizeSetup(event.data?.object || {});
+  }
 
   if (SUCCESS_EVENTS.has(event.type)) {
     const ids = paymentIdsFromEvent(event);

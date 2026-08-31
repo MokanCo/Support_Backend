@@ -278,16 +278,33 @@ export async function runOverdueStatusSync() {
   return { modified: result.modifiedCount || 0 };
 }
 
-let lastDailyKey = '';
-let lastReminderKey = '';
-let lastLateFeeKey = '';
+/**
+ * Whether `jobName` already completed (success OR a deliberate skip — both
+ * finish with status 'success') since the start of today. Checked against
+ * ArJobRun rather than an in-memory flag: an in-memory "ran today" variable
+ * resets to false on every process restart (crash, deploy, or — in dev —
+ * every file save under `node --watch`), which previously caused jobs like
+ * the monthly statement generator to silently re-run and re-email every
+ * customer each time the process happened to restart on the day they were
+ * due to fire.
+ */
+async function alreadyRanToday(jobName) {
+  const existing = await ArJobRun.findOne({
+    jobName,
+    status: 'success',
+    startedAt: { $gte: startOfDay() },
+  })
+    .select('_id')
+    .lean();
+  return Boolean(existing);
+}
 
 /**
  * Lightweight tick called from server interval.
- * Runs each job at most once per calendar day (keyed by YYYY-MM-DD).
+ * Runs each job at most once per calendar day, guarded by a persisted
+ * ArJobRun record rather than in-memory state.
  */
 export async function runArSchedulerTick() {
-  const dayKey = new Date().toISOString().slice(0, 10);
   const hour = new Date().getHours();
 
   try {
@@ -298,21 +315,23 @@ export async function runArSchedulerTick() {
   }
 
   // Invoice generation — once per day after 01:00
-  if (hour >= 1 && lastDailyKey !== dayKey) {
-    lastDailyKey = dayKey;
+  if (hour >= 1 && !(await alreadyRanToday('daily_invoice_generation'))) {
     await runDailyInvoiceGeneration();
+  }
+
+  // Monthly statements — its own internal date guard restricts this to the
+  // 1st, but still gated here so a restart doesn't re-fire it that same day.
+  if (hour >= 1 && !(await alreadyRanToday('monthly_statement_generator'))) {
     await runMonthlyStatementGenerator();
   }
 
   // Reminders — once per day after 08:00
-  if (hour >= 8 && lastReminderKey !== dayKey) {
-    lastReminderKey = dayKey;
+  if (hour >= 8 && !(await alreadyRanToday('reminder_scheduler'))) {
     await runReminderScheduler();
   }
 
   // Late fees — once per day after 22:00
-  if (hour >= 22 && lastLateFeeKey !== dayKey) {
-    lastLateFeeKey = dayKey;
+  if (hour >= 22 && !(await alreadyRanToday('late_fee_scheduler'))) {
     await runLateFeeScheduler();
   }
 }

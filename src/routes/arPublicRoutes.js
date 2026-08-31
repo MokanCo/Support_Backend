@@ -2,9 +2,14 @@ import { Router } from 'express';
 import multer from 'multer';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import * as publicInvoice from '../services/ar/arPublicInvoiceService.js';
+import * as achSetup from '../services/ar/arPublicAchSetupService.js';
 import { createPublicCheckoutSession } from '../services/ar/arStripeService.js';
 
 const router = Router();
+
+function clientIp(req) {
+  return req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() || req.ip || '';
+}
 
 const proofUpload = multer({
   storage: multer.memoryStorage(),
@@ -48,6 +53,30 @@ router.post(
         req.params.token,
         req.body?.paymentMethodType,
       ),
+    );
+  }),
+);
+
+/**
+ * One-time (not tied to any invoice) ACH bank-account linking — no auth.
+ * GET  /api/public/ach-setup/:token
+ * POST /api/public/ach-setup/:token/setup-intent
+ */
+router.get(
+  '/ach-setup/:token',
+  asyncHandler(async (req, res) => {
+    res.json(await achSetup.getPublicAchSetup(req.params.token));
+  }),
+);
+
+router.post(
+  '/ach-setup/:token/setup-intent',
+  asyncHandler(async (req, res) => {
+    res.json(
+      await achSetup.createAchSetupIntent(req.params.token, {
+        ipAddress: clientIp(req),
+        userAgent: req.headers['user-agent'] || '',
+      }),
     );
   }),
 );
