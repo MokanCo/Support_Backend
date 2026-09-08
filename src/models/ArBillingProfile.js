@@ -49,8 +49,26 @@ const arBillingProfileSchema = new mongoose.Schema(
     achBankName: { type: String, default: '' },
     achBankLast4: { type: String, default: '' },
     achAuthorizedAt: { type: Date, default: null },
-    achSetupToken: { type: String, default: null, index: { unique: true, sparse: true } },
+    // No `default` here deliberately — see publicPaymentToken in ArInvoice.js
+    // for why a sparse unique index combined with an explicit null default
+    // causes every document without a real token yet to collide on the same
+    // indexed null value.
+    achSetupToken: { type: String, index: { unique: true, sparse: true } },
     achSetupTokenCreatedAt: { type: Date, default: null },
+
+    // Saved backup credit card — optional, added as a second step in the
+    // same one-time setup link, used when a scheduled ACH debit bounces for
+    // insufficient funds (see chargeSavedCard in arStripeService.js). Always
+    // an explicit admin action — never auto-charged on ACH failure.
+    cardPaymentMethodId: { type: String, default: '' },
+    cardBrand: { type: String, default: '' },
+    cardLast4: { type: String, default: '' },
+    cardStatus: {
+      type: String,
+      enum: ['none', 'active', 'revoked'],
+      default: 'none',
+    },
+    cardAuthorizedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

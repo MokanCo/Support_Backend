@@ -12,6 +12,7 @@ import {
 import { writeArAudit } from './arAuditService.js';
 import { getOrCreateSettings } from './arSettingsService.js';
 import { sendAchSetupEmail } from './arMailService.js';
+import { getStripeClient } from './arStripeService.js';
 
 function formatAchPaymentMethod(d) {
   if (!d.achStatus || d.achStatus === 'none') return null;
@@ -21,6 +22,16 @@ function formatAchPaymentMethod(d) {
     last4: d.achBankLast4 || '',
     mandateId: d.achMandateId || '',
     authorizedAt: d.achAuthorizedAt || null,
+  };
+}
+
+function formatCardPaymentMethod(d) {
+  if (!d.cardStatus || d.cardStatus === 'none') return null;
+  return {
+    status: d.cardStatus,
+    brand: d.cardBrand || '',
+    last4: d.cardLast4 || '',
+    authorizedAt: d.cardAuthorizedAt || null,
   };
 }
 
@@ -47,6 +58,7 @@ function formatProfile(doc, location = null) {
     lateFeeAmount: d.lateFeeAmount,
     internalNotes: d.internalNotes,
     achPaymentMethod: formatAchPaymentMethod(d),
+    cardPaymentMethod: formatCardPaymentMethod(d),
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
   };
@@ -108,6 +120,7 @@ export async function listBillingProfiles(actor, query) {
         lateFeeAmount: settings.lateFeeAmount,
         internalNotes: '',
         achPaymentMethod: null,
+        cardPaymentMethod: null,
         createdAt: null,
         updatedAt: null,
       };
@@ -226,6 +239,13 @@ export async function createAchSetupLink(actor, locationId, ipAddress = '') {
   let doc = await ArBillingProfile.findOne({ locationId, isDeleted: { $ne: true } });
   if (!doc) doc = new ArBillingProfile({ locationId });
 
+  if (doc.achStatus === 'active') {
+    throw new AppError(
+      'This customer already has a linked, verified bank account — unlink it first if you need to link a different one',
+      409,
+    );
+  }
+
   const recipientEmail = String(
     doc.billingEmail || doc.secondaryBillingEmail || location.email || '',
   ).trim();
@@ -263,4 +283,101 @@ export async function createAchSetupLink(actor, locationId, ipAddress = '') {
   });
 
   return { emailedTo: recipientEmail };
+}
+
+/**
+ * Revokes a customer's saved ACH bank account — detaches the payment method
+ * on Stripe (best-effort; already-gone is fine) and clears it locally so no
+ * further off-session charges can be made against it. This is the only way
+ * back to a linkable state once achStatus is 'active', since a fresh setup
+ * link is refused while one is already linked.
+ */
+export async function unlinkAchAccount(actor, locationId, ipAddress = '') {
+  assertCanManageAr(actor);
+  const location = await Location.findById(locationId).lean();
+  if (!location) throw new AppError('Location not found', 404);
+
+  const doc = await ArBillingProfile.findOne({ locationId, isDeleted: { $ne: true } });
+  if (!doc || doc.achStatus === 'none') {
+    throw new AppError('No linked bank account to unlink', 409);
+  }
+
+  if (doc.achPaymentMethodId) {
+    try {
+      const stripe = getStripeClient();
+      await stripe.paymentMethods.detach(doc.achPaymentMethodId);
+    } catch (e) {
+      // Already detached, or the customer/PM no longer exists on Stripe's
+      // side — proceed with local cleanup regardless, since the goal is
+      // "stop being able to charge this" and that's guaranteed either way.
+    }
+  }
+
+  const prev = formatProfile(doc, location);
+  doc.achStatus = 'revoked';
+  doc.achPaymentMethodId = '';
+  doc.achMandateId = '';
+  doc.achBankName = '';
+  doc.achBankLast4 = '';
+  doc.achAuthorizedAt = null;
+  await doc.save();
+
+  await writeArAudit({
+    entityType: 'billing_profile',
+    entityId: String(doc._id),
+    action: 'ach_unlinked',
+    description: `ACH bank account unlinked for ${location.name}`,
+    previousValue: prev,
+    newValue: formatProfile(doc, location),
+    actor,
+    ipAddress,
+  });
+
+  return { profile: formatProfile(doc, location) };
+}
+
+/**
+ * Revokes a customer's saved backup credit card — same pattern as
+ * unlinkAchAccount. The bank account (if any) is untouched.
+ */
+export async function unlinkCardAccount(actor, locationId, ipAddress = '') {
+  assertCanManageAr(actor);
+  const location = await Location.findById(locationId).lean();
+  if (!location) throw new AppError('Location not found', 404);
+
+  const doc = await ArBillingProfile.findOne({ locationId, isDeleted: { $ne: true } });
+  if (!doc || doc.cardStatus === 'none') {
+    throw new AppError('No linked card to unlink', 409);
+  }
+
+  if (doc.cardPaymentMethodId) {
+    try {
+      const stripe = getStripeClient();
+      await stripe.paymentMethods.detach(doc.cardPaymentMethodId);
+    } catch (e) {
+      // Already detached, or the customer/PM no longer exists on Stripe's
+      // side — proceed with local cleanup regardless.
+    }
+  }
+
+  const prev = formatProfile(doc, location);
+  doc.cardStatus = 'revoked';
+  doc.cardPaymentMethodId = '';
+  doc.cardBrand = '';
+  doc.cardLast4 = '';
+  doc.cardAuthorizedAt = null;
+  await doc.save();
+
+  await writeArAudit({
+    entityType: 'billing_profile',
+    entityId: String(doc._id),
+    action: 'card_unlinked',
+    description: `Backup card unlinked for ${location.name}`,
+    previousValue: prev,
+    newValue: formatProfile(doc, location),
+    actor,
+    ipAddress,
+  });
+
+  return { profile: formatProfile(doc, location) };
 }

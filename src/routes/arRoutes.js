@@ -301,6 +301,16 @@ router.post(
   roleMiddleware(['admin']),
   ar.createAchSetupLink,
 );
+router.post(
+  '/billing-profiles/:locationId/ach-unlink',
+  roleMiddleware(['admin']),
+  ar.unlinkAchAccount,
+);
+router.post(
+  '/billing-profiles/:locationId/card-unlink',
+  roleMiddleware(['admin']),
+  ar.unlinkCardAccount,
+);
 
 /**
  * @swagger
@@ -486,6 +496,11 @@ router.post(
   '/invoices/:id/charge-saved-ach',
   roleMiddleware(['admin']),
   ar.chargeSavedAch,
+);
+router.post(
+  '/invoices/:id/charge-saved-card',
+  roleMiddleware(['admin']),
+  ar.chargeSavedCard,
 );
 
 /**

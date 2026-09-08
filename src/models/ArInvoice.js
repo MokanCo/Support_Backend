@@ -83,8 +83,17 @@ const arInvoiceSchema = new mongoose.Schema(
     /**
      * Secure, random public payment token for unauthenticated /invoice/pay access.
      * Not derived from invoice/partner IDs. Revoke by clearing or setting revokedAt.
+     *
+     * Deliberately has NO `default` — a sparse unique index only excludes
+     * documents where the field is truly absent, not documents where it's
+     * explicitly `null`. With a `default: null`, every invoice without a
+     * token yet would write an explicit null, and the first one to do so
+     * would permanently block every other invoice from being created (an
+     * E11000 duplicate key error on `publicPaymentToken: null`) until it got
+     * a real token assigned. Leaving the field genuinely unset for a new
+     * document keeps it correctly excluded from the index.
      */
-    publicPaymentToken: { type: String, default: null, index: true, sparse: true, unique: true },
+    publicPaymentToken: { type: String, index: true, sparse: true, unique: true },
     publicPaymentTokenCreatedAt: { type: Date, default: null },
     publicPaymentTokenRevokedAt: { type: Date, default: null },
     attachments: { type: [attachmentSchema], default: [] },

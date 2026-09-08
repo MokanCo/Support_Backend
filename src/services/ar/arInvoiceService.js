@@ -92,14 +92,15 @@ function pushTimeline(invoice, event) {
   });
 }
 
-/** Most recent non-final ACH direct-debit attempt against this invoice, if
- *  any — surfaced to the UI as "ACH processing" / "ACH failed" so admins and
- *  the customer-facing page can reflect a saved-bank-account charge that's
- *  still settling asynchronously via webhook. */
-function formatAchCharge(payment) {
+/** Most recent non-final direct charge (ACH or saved-card) against this
+ *  invoice, if any — surfaced to the UI as "ACH processing"/"Card failed"
+ *  etc. so admins and the customer-facing page can reflect a saved-payment-
+ *  method charge that's still settling (ACH) or that failed. */
+function formatDirectCharge(payment) {
   if (!payment) return null;
   if (payment.paymentStatus !== 'pending' && payment.paymentStatus !== 'failed') return null;
   return {
+    method: payment.stripePaymentMethodType === 'card' ? 'card' : 'ach',
     status: payment.paymentStatus === 'pending' ? 'processing' : 'failed',
     amount: payment.amount,
     initiatedAt: payment.createdAt,
@@ -107,7 +108,7 @@ function formatAchCharge(payment) {
   };
 }
 
-function formatInvoice(doc, locationName = '', achPayment = null) {
+function formatInvoice(doc, locationName = '', directPayment = null) {
   const d = doc.toObject ? doc.toObject() : doc;
   return {
     id: String(d._id),
@@ -141,20 +142,20 @@ function formatInvoice(doc, locationName = '', achPayment = null) {
     viewedAt: d.viewedAt,
     paidAt: d.paidAt,
     scheduledSendAt: d.scheduledSendAt,
-    achCharge: formatAchCharge(achPayment),
+    directCharge: formatDirectCharge(directPayment),
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
   };
 }
 
-/** Batch-loads the latest ach payment per invoice id — avoids N+1 queries
- *  when formatting a list of invoices. */
-async function loadAchChargesByInvoice(invoiceIds) {
+/** Batch-loads the latest direct-charge (ACH or card) payment per invoice id
+ *  — avoids N+1 queries when formatting a list of invoices. */
+async function loadDirectChargesByInvoice(invoiceIds) {
   if (!invoiceIds.length) return new Map();
   const payments = await ArPayment.find({
     invoiceId: { $in: invoiceIds },
     isDeleted: { $ne: true },
-    stripePaymentMethodType: 'ach',
+    stripePaymentMethodType: { $in: ['ach', 'card'] },
     paymentStatus: { $in: ['pending', 'failed'] },
   })
     .sort({ createdAt: -1 })
@@ -204,15 +205,15 @@ export async function listInvoices(actor, query) {
   ]);
 
   const locIds = [...new Set(items.map((i) => String(i.locationId)))];
-  const [locs, achByInvoice] = await Promise.all([
+  const [locs, directByInvoice] = await Promise.all([
     Location.find({ _id: { $in: locIds } }).lean(),
-    loadAchChargesByInvoice(items.map((i) => i._id)),
+    loadDirectChargesByInvoice(items.map((i) => i._id)),
   ]);
   const locMap = new Map(locs.map((l) => [String(l._id), l.name]));
 
   return {
     invoices: items.map((i) =>
-      formatInvoice(i, locMap.get(String(i.locationId)) || '', achByInvoice.get(String(i._id))),
+      formatInvoice(i, locMap.get(String(i.locationId)) || '', directByInvoice.get(String(i._id))),
     ),
     total,
     page,
@@ -234,12 +235,12 @@ export async function getInvoice(actor, id) {
   ) {
     await ensurePublicPaymentToken(doc);
   }
-  const [location, achByInvoice] = await Promise.all([
+  const [location, directByInvoice] = await Promise.all([
     Location.findById(doc.locationId).lean(),
-    loadAchChargesByInvoice([doc._id]),
+    loadDirectChargesByInvoice([doc._id]),
   ]);
   return {
-    invoice: formatInvoice(doc, location?.name || '', achByInvoice.get(String(doc._id))),
+    invoice: formatInvoice(doc, location?.name || '', directByInvoice.get(String(doc._id))),
   };
 }
 
@@ -279,6 +280,14 @@ export async function createInvoice(actor, input, ipAddress = '') {
     ...totals,
     createdBy: actor.id,
   });
+
+  // Drafts stay numberless until approved/sent (existing behavior). Any
+  // caller creating an invoice already in a non-draft status — e.g. a direct
+  // ACH charge, which skips the approve/send step entirely — needs its
+  // number assigned right here, or it would never get one.
+  if (doc.status !== 'draft') {
+    doc.invoiceNumber = await nextInvoiceNumber();
+  }
 
   pushTimeline(doc, {
     eventType: 'created',

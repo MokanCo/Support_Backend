@@ -81,4 +81,11 @@ router.post(
   }),
 );
 
+router.post(
+  '/ach-setup/:token/card-setup-intent',
+  asyncHandler(async (req, res) => {
+    res.json(await achSetup.createCardSetupIntent(req.params.token));
+  }),
+);
+
 export default router;

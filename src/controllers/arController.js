@@ -126,6 +126,18 @@ export const createAchSetupLink = asyncHandler(async (req, res) => {
   );
 });
 
+export const unlinkAchAccount = asyncHandler(async (req, res) => {
+  res.json(
+    await billingService.unlinkAchAccount(actor(req), req.params.locationId, ip(req)),
+  );
+});
+
+export const unlinkCardAccount = asyncHandler(async (req, res) => {
+  res.json(
+    await billingService.unlinkCardAccount(actor(req), req.params.locationId, ip(req)),
+  );
+});
+
 export const listInvoices = asyncHandler(async (req, res) => {
   res.json(await invoiceService.listInvoices(actor(req), req.query));
 });
@@ -156,6 +168,10 @@ export const viewInvoice = asyncHandler(async (req, res) => {
 
 export const chargeSavedAch = asyncHandler(async (req, res) => {
   res.json(await stripeService.chargeSavedAch(actor(req), req.params.id, ip(req)));
+});
+
+export const chargeSavedCard = asyncHandler(async (req, res) => {
+  res.json(await stripeService.chargeSavedCard(actor(req), req.params.id, ip(req)));
 });
 
 export const duplicateInvoice = asyncHandler(async (req, res) => {
