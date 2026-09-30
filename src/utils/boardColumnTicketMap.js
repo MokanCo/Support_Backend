@@ -5,6 +5,7 @@ export function columnNameToTicketStatus(name) {
     .toLowerCase();
   if (['todo', 'to do', 'backlog', 'queue', 'new'].includes(n)) return 'in_queue';
   if (['in progress', 'in_progress', 'doing', 'progress', 'review'].includes(n)) return 'in_progress';
+  if (['on hold', 'on_hold', 'blocked', 'hold', 'waiting'].includes(n)) return 'on_hold';
   if (['done', 'completed', 'closed', 'complete'].includes(n)) return 'completed';
   if (['cancelled', 'canceled'].includes(n)) return 'cancelled';
   return null;

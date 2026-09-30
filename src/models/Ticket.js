@@ -13,7 +13,7 @@ import mongoose from 'mongoose';
  *         title: { type: string }
  *         description: { type: string }
  *         category: { type: string }
- *         status: { type: string, enum: [in_queue, in_progress, completed, cancelled] }
+ *         status: { type: string, enum: [in_queue, in_progress, on_hold, completed, cancelled] }
  *         priority: { type: string, enum: [p0, p1, p2, p3, p4] }
  *         progress: { type: integer, minimum: 0, maximum: 100 }
  *         deadline: { type: string, format: date-time, nullable: true }
@@ -23,7 +23,7 @@ import mongoose from 'mongoose';
  *         createdAt: { type: string, format: date-time }
  *         updatedAt: { type: string, format: date-time }
  */
-const STATUSES = ['in_queue', 'in_progress', 'completed', 'cancelled'];
+const STATUSES = ['in_queue', 'in_progress', 'on_hold', 'completed', 'cancelled'];
 const PRIORITIES = ['p0', 'p1', 'p2', 'p3', 'p4'];
 
 const ticketSchema = new mongoose.Schema(

@@ -88,7 +88,7 @@ const swaggerDefinition = {
           category: { type: 'string' },
           status: {
             type: 'string',
-            enum: ['in_queue', 'in_progress', 'completed', 'cancelled'],
+            enum: ['in_queue', 'in_progress', 'on_hold', 'completed', 'cancelled'],
           },
           priority: { type: 'string', enum: ['p0', 'p1', 'p2', 'p3', 'p4'] },
           progress: { type: 'integer', minimum: 0, maximum: 100 },
@@ -219,7 +219,7 @@ const swaggerDefinition = {
           category: { type: 'string', example: 'Hardware' },
           status: {
             type: 'string',
-            enum: ['in_queue', 'in_progress', 'completed', 'cancelled'],
+            enum: ['in_queue', 'in_progress', 'on_hold', 'completed', 'cancelled'],
           },
           priority: { type: 'string', enum: ['p0', 'p1', 'p2', 'p3', 'p4'] },
           progress: { type: 'integer', minimum: 0, maximum: 100 },
@@ -236,7 +236,7 @@ const swaggerDefinition = {
           category: { type: 'string' },
           status: {
             type: 'string',
-            enum: ['in_queue', 'in_progress', 'completed', 'cancelled'],
+            enum: ['in_queue', 'in_progress', 'on_hold', 'completed', 'cancelled'],
           },
           priority: { type: 'string', enum: ['p0', 'p1', 'p2', 'p3', 'p4'] },
           progress: { type: 'integer', minimum: 0, maximum: 100 },

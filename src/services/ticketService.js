@@ -359,6 +359,10 @@ export async function listTickets(actor, query) {
     filter.status = 'in_queue';
   } else if (query.status) {
     filter.status = query.status;
+  } else {
+    // "All statuses" (no explicit filter) hides completed tickets by default —
+    // they only show up once someone deliberately filters to "Completed".
+    filter.status = { $ne: 'completed' };
   }
   if (query.priority) {
     filter.priority = query.priority;
