@@ -17,11 +17,12 @@ import {
   maybeConvertVideoToWebm,
   extractThumbnailFromVideoBuffer,
 } from './videoOptimizeService.js';
+import { isPsdFile, maybeCompressPsd } from './psdOptimizeService.js';
 import { toObjectId as folderToObjectId } from './assetFolderService.js';
 
 export const ASSET_UPLOAD_ROOT = path.join(process.cwd(), 'uploads', 'assets');
 
-/** 100 MB — videos need headroom before WebM conversion. */
+/** 100 MB — the size every uploaded asset must fit under, same limit for every file type. */
 export const MAX_ASSET_FILE_SIZE = 100 * 1024 * 1024;
 
 export const ALLOWED_ASSET_EXTENSIONS = new Set([
@@ -41,6 +42,8 @@ export const ALLOWED_ASSET_EXTENSIONS = new Set([
   '.webp',
   '.svg',
   '.zip',
+  '.psd',
+  '.psb',
   '.mp4',
   '.mov',
   '.avi',
@@ -53,13 +56,10 @@ export const ALLOWED_ASSET_EXTENSIONS = new Set([
   '.3gp',
 ]);
 
-export function validateAssetFile(file) {
+function validateAssetFileType(file) {
   if (!file) throw new AppError('File is required', 400);
   const size = file.size ?? file.buffer?.length ?? 0;
   if (!size) throw new AppError('File is empty', 400);
-  if (size > MAX_ASSET_FILE_SIZE) {
-    throw new AppError('File exceeds maximum size of 100 MB', 400);
-  }
   const ext = path.extname(file.originalname || '').toLowerCase();
   if (!ALLOWED_ASSET_EXTENSIONS.has(ext)) {
     throw new AppError(
@@ -67,6 +67,18 @@ export function validateAssetFile(file) {
       400,
     );
   }
+}
+
+function validateStoredFileSize(size) {
+  if (size > MAX_ASSET_FILE_SIZE) {
+    throw new AppError('File exceeds maximum size of 100 MB', 400);
+  }
+}
+
+/** Kept for compatibility — type + size check against the original upload. */
+export function validateAssetFile(file) {
+  validateAssetFileType(file);
+  validateStoredFileSize(file.size ?? file.buffer?.length ?? 0);
 }
 
 function isVideoMime(mimeType) {
@@ -137,15 +149,26 @@ async function storeFileLocally(file) {
  * then upload to R2 or local disk.
  */
 async function persistUpload(file, category) {
-  validateAssetFile(file);
+  validateAssetFileType(file);
   let optimized = await maybeConvertImageToWebp(file);
   if (!optimized.converted) {
     optimized = await maybeConvertVideoToWebm(optimized);
   }
+  if (!optimized.converted && isPsdFile(file)) {
+    optimized = await maybeCompressPsd(optimized);
+  }
+  // Belt-and-suspenders: multer already enforces this at upload time, but a
+  // lossless re-encode is a no-op size-wise in the worst case, never larger.
+  validateStoredFileSize(optimized.size ?? optimized.buffer?.length ?? 0);
 
   // Image assets get a small WebP card thumb so lists never download full files.
+  // PSD isn't a rasterizable mimetype for sharp, so it's excluded here (no card thumb).
   let cardThumb = optimized.thumbnail || null;
-  if (!cardThumb?.buffer?.length && String(optimized.mimetype || '').startsWith('image/')) {
+  if (
+    !cardThumb?.buffer?.length &&
+    String(optimized.mimetype || '').startsWith('image/') &&
+    optimized.mimetype !== 'image/vnd.adobe.photoshop'
+  ) {
     cardThumb = await toWebpThumbnail(optimized.buffer, {
       originalname: optimized.originalname,
     });
@@ -524,7 +547,8 @@ export async function getAssetThumbnailBuffer(id, { role, locationId }) {
   const doc = await loadAccessibleAssetDoc(id, { role, locationId });
   const mime = String(doc.mimeType || '');
   const isVideo = mime.startsWith('video/');
-  const isImage = mime.startsWith('image/');
+  // PSD carries an image/* mimetype but sharp can't decode it — no thumbnail support.
+  const isImage = mime.startsWith('image/') && mime !== 'image/vnd.adobe.photoshop';
   if (!isVideo && !isImage && !(doc.thumbnailUrl || doc.thumbnailStorageKey)) {
     throw new AppError('Thumbnails are only available for images and videos', 400);
   }
