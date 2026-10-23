@@ -42,6 +42,15 @@ function canDownloadAsset(actor, doc) {
   return true;
 }
 
+/** Partners may only include images in multi-file zip downloads. */
+function canBulkDownloadAsset(actor, doc) {
+  if (!canDownloadAsset(actor, doc)) return false;
+  if (actor?.role === 'partner') {
+    return String(doc.mimeType || '').startsWith('image/');
+  }
+  return true;
+}
+
 function actorFilter(actor) {
   return accessFilter({
     role: actor.role,
@@ -146,7 +155,7 @@ export async function listAssetArchiveEntries(actor, { category, assetIds }) {
   const used = new Set();
   const entries = [];
   for (const doc of docs) {
-    if (!canDownloadAsset(actor, doc)) continue;
+    if (!canBulkDownloadAsset(actor, doc)) continue;
     const filename = doc.originalName || doc.name || 'file';
     entries.push({ zipPath: uniqueZipPath(used, '', filename), doc });
   }

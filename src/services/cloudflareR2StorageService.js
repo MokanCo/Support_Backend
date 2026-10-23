@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import path from 'path';
+import { Readable } from 'node:stream';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { AppError } from '../utils/AppError.js';
 
 /**
@@ -122,6 +124,77 @@ export async function getObjectBuffer(category, key) {
   }
 }
 
+/**
+ * Stream an object (supports HTTP Range so PDF viewers can show the first pages quickly).
+ * @returns {Promise<{ body: import('stream').Readable | ReadableStream; contentType: string; contentLength?: number; contentRange?: string } | null>}
+ */
+export async function getObjectStream(category, key, range) {
+  const client = getClient();
+  const { bucketName } = getBucketConfig(category);
+  if (!client || !bucketName) return null;
+  try {
+    const out = await client.send(
+      new GetObjectCommand({
+        Bucket: bucketName,
+        Key: String(key).replace(/^\/+/, ''),
+        ...(range ? { Range: String(range) } : {}),
+      }),
+    );
+    if (!out.Body) return null;
+    return {
+      body: out.Body,
+      contentType: out.ContentType || 'application/octet-stream',
+      contentLength: out.ContentLength,
+      contentRange: out.ContentRange,
+    };
+  } catch (err) {
+    const status = err?.$metadata?.httpStatusCode;
+    if (status === 416) {
+      const rangeErr = new AppError('Requested range not satisfiable', 416);
+      throw rangeErr;
+    }
+    if (status !== 404) {
+      // eslint-disable-next-line no-console
+      console.warn(`[r2] getObjectStream failed key=${key} status=${status} ${err?.name || err?.message}`);
+    }
+    return null;
+  }
+}
+
+export function bodyToNodeStream(body) {
+  if (!body) return null;
+  if (typeof body.pipe === 'function') return body;
+  return Readable.fromWeb(body);
+}
+
+/**
+ * Direct-to-R2 GET URL. ResponseContentType lets the browser treat PDFs as PDFs
+ * even when the stored object metadata is wrong.
+ */
+export async function getPresignedGetUrl(category, key, options = {}) {
+  const client = getClient();
+  const { bucketName } = getBucketConfig(category);
+  if (!client || !bucketName || !key) return null;
+  const filename = String(options.filename || 'file')
+    .replace(/["\r\n]/g, '_')
+    .slice(0, 180);
+  try {
+    const command = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: String(key).replace(/^\/+/, ''),
+      ...(options.contentType ? { ResponseContentType: options.contentType } : {}),
+      ResponseContentDisposition: `inline; filename="${filename}"`,
+    });
+    return await getSignedUrl(client, command, {
+      expiresIn: Number(options.expiresIn) || 300,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[r2] presign failed key=${key} ${err?.name || err?.message}`);
+    return null;
+  }
+}
+
 function getClient() {
   if (cachedClient !== undefined) return cachedClient;
   const { accountId, accessKeyId, secretAccessKey } = getCredentials();
@@ -221,5 +294,7 @@ export const CloudflareR2StorageService = {
   isConfigured: isR2Configured,
   uploadFile,
   getObjectBuffer,
+  getObjectStream,
+  getPresignedGetUrl,
   publicUrlForKey,
 };
