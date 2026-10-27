@@ -236,6 +236,58 @@ export async function createOnboardingNewRequestNotification({ requestId, locati
 }
 
 /**
+ * Notify every admin when a partner reports sending payment for an invoice
+ * via a manual method (Zelle/wire/check/etc.) — the partner is self-reporting
+ * intent, not recording an actual payment; links to the pending-submissions
+ * review queue where an admin approves (records the real payment) or rejects.
+ * @param {{ submissionId: string; invoiceId: string; invoiceNumber: string; amount: number; method: string; locationName: string; partnerName: string }} meta
+ */
+export async function createArPaymentSubmittedAdminNotification({
+  submissionId,
+  invoiceNumber,
+  amount,
+  method,
+  locationName,
+  partnerName,
+}) {
+  const admins = await User.find({ role: { $in: ['admin', 'support'] } }).select('_id').lean();
+  if (!admins.length) return;
+
+  const title = 'Payment reported by partner';
+  const body = `${partnerName} (${locationName}) says they sent $${Number(amount).toFixed(2)} via ${method} for Invoice ${invoiceNumber}. Review to confirm.`;
+
+  for (const a of admins) {
+    const adminId = a._id;
+    // eslint-disable-next-line no-await-in-loop
+    const doc = await UserNotification.create({
+      userId: adminId,
+      channel: STATUS_CHANNEL,
+      kind: 'ar:payment_submitted',
+      entityType: 'ar_payment_submission',
+      entityId: String(submissionId),
+      title,
+      body,
+    });
+
+    const createdAt =
+      doc && doc.createdAt instanceof Date
+        ? doc.createdAt.toISOString()
+        : new Date().toISOString();
+
+    emitUserNotification(String(adminId), {
+      id: String(doc._id),
+      channel: STATUS_CHANNEL,
+      kind: 'ar:payment_submitted',
+      entityType: 'ar_payment_submission',
+      entityId: String(submissionId),
+      title,
+      body,
+      createdAt,
+    });
+  }
+}
+
+/**
  * @param {{ id: string }} actor
  * @param {{ channel?: string }} query
  */
@@ -256,6 +308,8 @@ export async function listNotificationsForUser(actor, query) {
     channel: r.channel,
     kind: r.kind,
     ticketId: r.ticketId ? String(r.ticketId) : null,
+    entityType: r.entityType || null,
+    entityId: r.entityId || null,
     title: r.title,
     body: r.body,
     createdAt: r.createdAt,

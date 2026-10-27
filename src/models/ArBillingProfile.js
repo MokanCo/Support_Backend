@@ -1,0 +1,76 @@
+import mongoose from 'mongoose';
+import { AR_FREQUENCIES, AR_DEFAULT_REMINDER_DAYS } from '../constants/arConstants.js';
+
+const arBillingProfileSchema = new mongoose.Schema(
+  {
+    locationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Location',
+      required: true,
+      unique: true,
+      index: true,
+    },
+    billingEmail: { type: String, default: '', lowercase: true, trim: true },
+    secondaryBillingEmail: { type: String, default: '', lowercase: true, trim: true },
+    phone: { type: String, default: '', trim: true },
+    billingAddress: {
+      line1: { type: String, default: '' },
+      line2: { type: String, default: '' },
+      city: { type: String, default: '' },
+      state: { type: String, default: '' },
+      zip: { type: String, default: '' },
+      country: { type: String, default: 'US' },
+    },
+    paymentTermsDays: { type: Number, default: 15 },
+    billingFrequency: { type: String, enum: AR_FREQUENCIES, default: 'monthly' },
+    currency: { type: String, default: 'USD' },
+    paymentMethod: { type: String, default: 'zelle' },
+    gracePeriodDays: { type: Number, default: 3 },
+    reminderDays: { type: [Number], default: () => [...AR_DEFAULT_REMINDER_DAYS] },
+    autoGenerateInvoice: { type: Boolean, default: true },
+    autoSendInvoice: { type: Boolean, default: true },
+    lateFeeEnabled: { type: Boolean, default: false },
+    lateFeeType: { type: String, enum: ['fixed', 'percent'], default: 'fixed' },
+    lateFeeAmount: { type: Number, default: 0 },
+    internalNotes: { type: String, default: '' },
+    isDeleted: { type: Boolean, default: false },
+
+    // Saved Stripe ACH Direct Debit bank account — set once via the one-time
+    // "ach-setup-link" flow, then reused for direct off-session charges on
+    // any future invoice (see chargeSavedAch in arStripeService.js).
+    stripeCustomerId: { type: String, default: '' },
+    achStatus: {
+      type: String,
+      enum: ['none', 'pending_verification', 'active', 'failed', 'revoked'],
+      default: 'none',
+    },
+    achPaymentMethodId: { type: String, default: '' },
+    achMandateId: { type: String, default: '' },
+    achBankName: { type: String, default: '' },
+    achBankLast4: { type: String, default: '' },
+    achAuthorizedAt: { type: Date, default: null },
+    // No `default` here deliberately — see publicPaymentToken in ArInvoice.js
+    // for why a sparse unique index combined with an explicit null default
+    // causes every document without a real token yet to collide on the same
+    // indexed null value.
+    achSetupToken: { type: String, index: { unique: true, sparse: true } },
+    achSetupTokenCreatedAt: { type: Date, default: null },
+
+    // Saved backup credit card — optional, added as a second step in the
+    // same one-time setup link, used when a scheduled ACH debit bounces for
+    // insufficient funds (see chargeSavedCard in arStripeService.js). Always
+    // an explicit admin action — never auto-charged on ACH failure.
+    cardPaymentMethodId: { type: String, default: '' },
+    cardBrand: { type: String, default: '' },
+    cardLast4: { type: String, default: '' },
+    cardStatus: {
+      type: String,
+      enum: ['none', 'active', 'revoked'],
+      default: 'none',
+    },
+    cardAuthorizedAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+);
+
+export default mongoose.model('ArBillingProfile', arBillingProfileSchema);
