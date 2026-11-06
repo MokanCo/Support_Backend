@@ -753,7 +753,13 @@ export async function processStripeEvent(event, store = defaultStore) {
     }
 
     const amounts = await db.loadAmounts(ids);
-    if (!amounts) return { handled: false };
+    if (!amounts) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[stripe webhook] ${event.type} (event ${event.id}) carried metadata.invoiceId=${ids.metadata.invoiceId} but no matching invoice was found — payment was NOT recorded.`,
+      );
+      return { handled: false };
+    }
     if (amounts.originalCents <= 0) {
       return { handled: true, duplicate: true };
     }
@@ -793,7 +799,13 @@ export async function processStripeEvent(event, store = defaultStore) {
       return { handled: true, duplicate: true };
     }
     const amounts = await db.loadAmounts(ids);
-    if (!amounts) return { handled: false };
+    if (!amounts) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[stripe webhook] ${event.type} (event ${event.id}) carried metadata.invoiceId=${ids.metadata.invoiceId} but no matching invoice was found — failure was NOT recorded.`,
+      );
+      return { handled: false };
+    }
     if (existing?.paymentStatus === 'pending') {
       applyIdsToExisting(
         existing,
