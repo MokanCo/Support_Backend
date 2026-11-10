@@ -79,7 +79,7 @@ function checkoutCompleted({
   sessionId = 'cs_test_1',
   paymentIntentId = 'pi_test_1',
   invoiceId = 'inv_1',
-  amountTotal = 10330,
+  amountTotal,
 } = {}) {
   const quote = quoteStripePayment(100, 'stripe', 'USD');
   return {
@@ -89,7 +89,9 @@ function checkoutCompleted({
         id: sessionId,
         payment_intent: paymentIntentId,
         payment_status: 'paid',
-        amount_total: amountTotal,
+        // Defaults to whatever the current fee config actually computes —
+        // never hardcode this, it drifts the moment fee rates change.
+        amount_total: amountTotal ?? quote.stripeChargeAmountCents,
         currency: 'usd',
         metadata: {
           invoiceId,
@@ -105,16 +107,17 @@ function checkoutCompleted({
 function paymentIntentSucceeded({
   paymentIntentId = 'pi_test_1',
   invoiceId = 'inv_1',
-  amount = 10330,
+  amount,
 } = {}) {
   const quote = quoteStripePayment(100, 'stripe', 'USD');
+  const chargeAmount = amount ?? quote.stripeChargeAmountCents;
   return {
     type: 'payment_intent.succeeded',
     data: {
       object: {
         id: paymentIntentId,
-        amount,
-        amount_received: amount,
+        amount: chargeAmount,
+        amount_received: chargeAmount,
         currency: 'usd',
         metadata: {
           invoiceId,
@@ -154,8 +157,9 @@ describe('successful Stripe payment', () => {
     assert.equal(p.paymentMethod, 'stripe');
     assert.equal(p.originalAmount, 100);
     assert.equal(p.amount, 100);
-    assert.equal(p.stripeChargeAmount, 103.3);
-    assert.equal(p.stripeProcessingFee, 3.3);
+    // Default combined card rate: 2.9% domestic + 1.5% international + $0.30 + $0.05 Radar = 4.4% + $0.35.
+    assert.equal(p.stripeChargeAmount, 104.97);
+    assert.equal(p.stripeProcessingFee, 4.97);
     assert.equal(p.stripeCheckoutSessionId, 'cs_test_1');
     assert.equal(p.stripePaymentIntentId, 'pi_test_1');
   });

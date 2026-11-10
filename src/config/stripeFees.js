@@ -1,12 +1,20 @@
 /**
  * Stripe processing-fee configuration and gross-up math.
  *
- * Defaults match typical US domestic card pricing (2.9% + $0.30). Stripe
- * pricing varies by account, country, card brand, currency, and method —
- * override via env rather than editing callers.
+ * Card pricing is a pass-through of every fee this Stripe account is charged
+ * on a card payment — the card's country isn't known until after payment, so
+ * the customer must be charged enough to cover the worst case (a non-US
+ * card) on every transaction:
  *
- *   STRIPE_FEE_PERCENT      percent points, e.g. 2.9 for 2.9%
- *   STRIPE_FEE_FIXED_CENTS  fixed fee in the smallest currency unit (30 = $0.30)
+ *   STRIPE_FEE_PERCENT               US domestic rate, percent points (default 2.9)
+ *   STRIPE_FEE_INTERNATIONAL_PERCENT international-card surcharge, percent points (default 1.5)
+ *   STRIPE_FEE_FIXED_CENTS           US domestic fixed fee, smallest currency unit (default 30 = $0.30)
+ *   STRIPE_RADAR_FEE_CENTS           Radar Standard per-screened-payment fee (default 5 = $0.05)
+ *
+ * These combine into one effective rate (default 4.4% + $0.35) used for the
+ * gross-up — a US card may net a few cents more than Stripe keeps, but a
+ * non-US card can never leave the business short. Override via env rather
+ * than editing callers.
  */
 
 function parseNumber(value, fallback) {
@@ -15,18 +23,32 @@ function parseNumber(value, fallback) {
 }
 
 export function getStripeFeeConfig(env = process.env) {
-  const percent = parseNumber(env.STRIPE_FEE_PERCENT, 2.9);
-  const fixedFeeCents = Math.round(parseNumber(env.STRIPE_FEE_FIXED_CENTS, 30));
+  const domesticPercent = parseNumber(env.STRIPE_FEE_PERCENT, 2.9);
+  const internationalPercent = parseNumber(env.STRIPE_FEE_INTERNATIONAL_PERCENT, 1.5);
+  const baseFixedCents = Math.round(parseNumber(env.STRIPE_FEE_FIXED_CENTS, 30));
+  const radarFeeCents = Math.round(parseNumber(env.STRIPE_RADAR_FEE_CENTS, 5));
+
+  const percent = domesticPercent + internationalPercent;
+  const fixedFeeCents = baseFixedCents + radarFeeCents;
   const percentRate = percent / 100;
+
   if (percentRate < 0 || percentRate >= 1) {
     throw new Error(
-      `STRIPE_FEE_PERCENT must be between 0 and 100 (got ${percent})`,
+      `STRIPE_FEE_PERCENT + STRIPE_FEE_INTERNATIONAL_PERCENT must combine to between 0 and 100 (got ${percent})`,
     );
   }
   if (fixedFeeCents < 0) {
-    throw new Error('STRIPE_FEE_FIXED_CENTS must be >= 0');
+    throw new Error('STRIPE_FEE_FIXED_CENTS + STRIPE_RADAR_FEE_CENTS must be >= 0');
   }
-  return { percent, percentRate, fixedFeeCents };
+  return {
+    percent,
+    percentRate,
+    fixedFeeCents,
+    domesticPercent,
+    internationalPercent,
+    baseFixedCents,
+    radarFeeCents,
+  };
 }
 
 /**
