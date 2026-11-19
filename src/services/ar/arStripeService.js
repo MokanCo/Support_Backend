@@ -428,6 +428,24 @@ export async function chargeSavedCard(actor, invoiceId, ipAddress = '') {
 }
 
 /**
+ * True if `pmType` (the payment method Stripe actually attached) is one this
+ * SetupIntent was created to accept. `createAchSetupIntent` restricts
+ * payment_method_types to ['us_bank_account'] and `createCardSetupIntent` to
+ * ['card'], so Stripe's own form can't mix the two setup steps up — this is
+ * the server-side cross-check so a mismatch is rejected rather than trusted.
+ * Exported for unit testing; `setupIntentObj.payment_method_types` missing
+ * entirely (older/unexpected event shape) fails open, since there's nothing
+ * to check against.
+ */
+export function isPaymentMethodTypeAllowed(setupIntentObj, pmType) {
+  const allowedTypes = Array.isArray(setupIntentObj?.payment_method_types)
+    ? setupIntentObj.payment_method_types
+    : null;
+  if (!allowedTypes) return true;
+  return allowedTypes.includes(pmType);
+}
+
+/**
  * Finalizes the one-time ACH bank-linking flow once Stripe confirms the
  * SetupIntent — saves the payment method/mandate onto the billing profile so
  * chargeSavedAch can debit it later with no further customer action.
@@ -451,6 +469,14 @@ async function finalizeAchSetup(setupIntentObj = {}) {
   const stripe = getStripeClient();
   const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
 
+  if (!isPaymentMethodTypeAllowed(setupIntentObj, pm.type)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[stripe webhook] setup_intent.succeeded resolved to payment method type "${pm.type}" but this SetupIntent only allowed [${setupIntentObj.payment_method_types.join(', ')}] — ignoring.`,
+    );
+    return { handled: false };
+  }
+
   const customerId =
     (typeof setupIntentObj.customer === 'string'
       ? setupIntentObj.customer
@@ -464,8 +490,7 @@ async function finalizeAchSetup(setupIntentObj = {}) {
     profile.cardLast4 = card.last4 || '';
     profile.cardStatus = 'active';
     profile.cardAuthorizedAt = new Date();
-  } else {
-    // us_bank_account (ACH Direct Debit) — the default/expected case.
+  } else if (pm.type === 'us_bank_account') {
     const bank = pm.us_bank_account || {};
     profile.achPaymentMethodId = paymentMethodId;
     profile.achMandateId =
@@ -476,6 +501,12 @@ async function finalizeAchSetup(setupIntentObj = {}) {
     profile.achBankLast4 = bank.last4 || '';
     profile.achStatus = 'active';
     profile.achAuthorizedAt = new Date();
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[stripe webhook] setup_intent.succeeded resolved to unsupported payment method type "${pm.type}" — ignoring.`,
+    );
+    return { handled: false };
   }
   await profile.save();
 

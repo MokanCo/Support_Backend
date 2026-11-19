@@ -113,9 +113,9 @@ export async function createAchSetupIntent(token, { ipAddress = '', userAgent = 
 
 /**
  * Creates a Stripe SetupIntent to save a backup credit card on the same
- * customer — a second, optional step offered after (or instead of) linking a
- * bank account. Used only as a manual fallback the admin explicitly chooses
- * per invoice when an ACH debit bounces; never auto-charged.
+ * customer — a required second step after linking a bank account. Used only
+ * as a manual fallback the admin explicitly chooses per invoice when an ACH
+ * debit bounces; never auto-charged.
  */
 export async function createCardSetupIntent(token) {
   const profile = await loadProfileByAchSetupToken(token);
