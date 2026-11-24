@@ -13,6 +13,9 @@ import onboardingRoutes from './routes/onboardingRoutes.js';
 import assetRoutes from './routes/assetRoutes.js';
 import documentRoutes from './routes/documentRoutes.js';
 import marketingAssetRoutes from './routes/marketingAssetRoutes.js';
+import phoneNumberRoutes from './routes/phoneNumberRoutes.js';
+import receptionistApiRoutes from './routes/receptionistApiRoutes.js';
+import voiceRoutes from './routes/voiceRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { mountSwagger } from './config/swagger.js';
 import { getMailConfigStatus, verifyMailConnection } from './services/mailSender.js';
@@ -49,6 +52,7 @@ app.use(
   }),
 );
 app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false }));
 
 app.get(
   '/health',
@@ -76,6 +80,9 @@ app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/marketing-assets', marketingAssetRoutes);
+app.use('/api/ai-receptionist/phone-numbers', phoneNumberRoutes);
+app.use('/api/ai-receptionist/voice', voiceRoutes);
+app.use('/api/ai-receptionist', receptionistApiRoutes);
 app.use('/api', boardApiRoutes);
 
 app.use((_req, _res, next) => {
