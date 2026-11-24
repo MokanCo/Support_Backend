@@ -17,6 +17,9 @@ import marketingAssetRoutes from './routes/marketingAssetRoutes.js';
 import arRoutes from './routes/arRoutes.js';
 import arPublicRoutes from './routes/arPublicRoutes.js';
 import { handleStripeWebhookEvent } from './services/ar/arStripeService.js';
+import phoneNumberRoutes from './routes/phoneNumberRoutes.js';
+import receptionistApiRoutes from './routes/receptionistApiRoutes.js';
+import voiceRoutes from './routes/voiceRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { mountSwagger } from './config/swagger.js';
 import { getMailConfigStatus, verifyMailConnection } from './services/mailSender.js';
@@ -65,6 +68,7 @@ app.post(
 );
 
 app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false }));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 app.get(
@@ -95,6 +99,9 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/marketing-assets', marketingAssetRoutes);
 app.use('/api/ar', arRoutes);
 app.use('/api/public', arPublicRoutes);
+app.use('/api/ai-receptionist/phone-numbers', phoneNumberRoutes);
+app.use('/api/ai-receptionist/voice', voiceRoutes);
+app.use('/api/ai-receptionist', receptionistApiRoutes);
 app.use('/api', boardApiRoutes);
 
 app.use((_req, _res, next) => {
