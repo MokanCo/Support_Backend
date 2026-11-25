@@ -272,13 +272,34 @@ router.post(
   }),
 );
 
+const importFileChecks = [
+  body('text').isString().isLength({ min: 1, max: 200000 }),
+  body('filename').optional().isString().isLength({ max: 180 }),
+  body('category').optional().isIn(KNOWLEDGE_CATEGORIES),
+  body('scope').optional().isIn(['global', 'branch']),
+  body('locationId').optional({ nullable: true }).isMongoId(),
+];
+
+function rejectUnsupportedImport(req, res) {
+  const name = String(req.body.filename || '');
+  if (name && !/\.(txt|md)$/i.test(name)) {
+    res.status(400).json({
+      success: false,
+      error: 'Only .txt and .md files can be imported',
+      message: 'Only .txt and .md files can be imported',
+    });
+    return true;
+  }
+  return false;
+}
+
 /**
  * @swagger
- * /api/ai-receptionist/knowledge/import:
+ * /api/ai-receptionist/knowledge/import/preview:
  *   post:
  *     tags: [Knowledge Base]
- *     summary: Import text or markdown knowledge
- *     description: Admin only. Accepts plain text. Blocks that start with "Q:" or "Question:" become separate approved entries. PDF import is not supported. Up to 50 entries per request.
+ *     summary: Preview a knowledge import without saving
+ *     description: Admin only. Parses a Markdown FAQ file into separate entries using each entry's title, approved answer, category, and scope. Category headings and Global or Branch headings are inherited until an entry sets its own value. A combined file may contain both scopes. Branch-scoped entries use locationId. Plain-text files that use "Q:" or "Question:" stay on the single category and scope in the request. Nothing is written.
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -286,35 +307,74 @@ router.post(
  *         application/json:
  *           schema:
  *             type: object
- *             required: [text, category, scope]
+ *             required: [text]
  *             properties:
- *               filename: { type: string, example: hours.txt }
+ *               filename: { type: string, example: moka-faqs.md }
  *               text: { type: string }
- *               category: { type: string }
- *               scope: { type: string, enum: [global, branch] }
- *               locationId: { type: string }
+ *               category: { type: string, description: Used only for plain-text Q/A files }
+ *               scope: { type: string, enum: [global, branch], description: Used only for plain-text Q/A files }
+ *               locationId: { type: string, description: Branch applied to branch-scoped entries }
  *     responses:
- *       201:
- *         description: Entries created
- *       400: { description: Empty text, unsupported file, or invalid category }
+ *       200:
+ *         description: Preview of detected entries
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/KnowledgeImportPreview' }
+ *       400: { description: Empty text or unsupported file }
  *       401: { description: Unauthorized }
  *       403: { description: Forbidden }
+ *       404: { description: Branch not found }
+ */
+router.post(
+  '/knowledge/import/preview',
+  ...admin,
+  ...importFileChecks,
+  validateRequest,
+  asyncHandler(async (req, res) => {
+    if (rejectUnsupportedImport(req, res)) return;
+    res.json(await knowledge.previewKnowledgeImport(req.body));
+  }),
+);
+
+/**
+ * @swagger
+ * /api/ai-receptionist/knowledge/import:
+ *   post:
+ *     tags: [Knowledge Base]
+ *     summary: Import text or markdown knowledge
+ *     description: Admin only. Markdown FAQ files are parsed into one approved knowledge record per entry. The file is not stored as a single entry. Each entry keeps its own category and scope. Branch-scoped entries are saved on locationId. Global entries stay global. Entries with missing fields, an unknown category, or a scope other than Global or Branch are skipped and returned. Duplicate titles for the same scope and branch are not created. Plain-text files that use "Q:" or "Question:" still import with the request category and scope, up to 50 entries. PDF import is not supported.
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [text]
+ *             properties:
+ *               filename: { type: string, example: moka-faqs.md }
+ *               text: { type: string }
+ *               category: { type: string, description: Required for plain-text Q/A files. Ignored when the file has structured FAQ entries. }
+ *               scope: { type: string, enum: [global, branch], description: Required for plain-text Q/A files. Ignored when each FAQ entry has a scope. }
+ *               locationId: { type: string, description: Required for branch-scoped entries }
+ *     responses:
+ *       201:
+ *         description: Import finished. created may be lower than the number of detected entries.
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/KnowledgeImportResult' }
+ *       400: { description: Empty text, unstructured markdown, unsupported file, or invalid plain-text category }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden }
+ *       404: { description: Branch not found }
  */
 router.post(
   '/knowledge/import',
   ...admin,
-  body('text').isString().isLength({ min: 1, max: 200000 }),
-  body('category').isIn(KNOWLEDGE_CATEGORIES),
-  body('scope').isIn(['global', 'branch']),
-  body('filename').optional().isString().isLength({ max: 180 }),
-  body('locationId').optional({ nullable: true }).isMongoId(),
+  ...importFileChecks,
   validateRequest,
   asyncHandler(async (req, res) => {
-    const name = String(req.body.filename || '');
-    if (name && !/\.(txt|md)$/i.test(name)) {
-      res.status(400).json({ success: false, error: 'Only .txt and .md files can be imported', message: 'Only .txt and .md files can be imported' });
-      return;
-    }
+    if (rejectUnsupportedImport(req, res)) return;
     res.status(201).json(await knowledge.importKnowledge(req.body, req.user));
   }),
 );

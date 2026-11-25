@@ -48,6 +48,33 @@ async function loadPhone(call) {
   return BranchPhoneNumber.findById(call.phoneNumberId);
 }
 
+function diversionLandline(body) {
+  const diversion = body?.diversion;
+  if (!diversion || typeof diversion !== 'object') return '';
+  return String(diversion.origTo || diversion.origto || diversion['orig-to'] || '');
+}
+
+function digitCandidates(value) {
+  const digits = normalizePhoneDigits(value);
+  if (!digits) return [];
+  const candidates = [digits];
+  if (digits.length === 11 && digits.startsWith('1')) candidates.push(digits.slice(1));
+  if (digits.length === 10) candidates.push(`1${digits}`);
+  return candidates;
+}
+
+async function findPhoneByNumber(value) {
+  const candidates = digitCandidates(value);
+  if (!candidates.length) return null;
+  return BranchPhoneNumber.findOne({ normalizedNumber: { $in: candidates } });
+}
+
+async function findInboundPhone(body) {
+  const landline = await findPhoneByNumber(diversionLandline(body));
+  if (landline) return landline;
+  return findPhoneByNumber(body?.to);
+}
+
 function toE164(number) {
   const digits = normalizePhoneDigits(number);
   if (digits.length === 10) return `+1${digits}`;
@@ -100,8 +127,9 @@ export async function handleInbound(body) {
 
   const to = String(body.to || '');
   const from = String(body.from || '');
-  const digits = normalizePhoneDigits(to);
-  const phone = digits ? await BranchPhoneNumber.findOne({ normalizedNumber: digits }) : null;
+  const phone = await findInboundPhone(body);
+  const matchedNumber = phone?.existingPhoneNumber || to;
+  const digits = normalizePhoneDigits(matchedNumber);
   const settings = await getSettings();
   const agent = await getEffectiveAgent(phone?.locationId);
 
@@ -109,7 +137,7 @@ export async function handleInbound(body) {
     await ReceptionistCall.create({
       callSid,
       from,
-      to,
+      to: matchedNumber,
       normalizedTo: digits,
       startedAt: new Date(),
       endedAt: new Date(),
@@ -125,7 +153,7 @@ export async function handleInbound(body) {
   const call = await ReceptionistCall.create({
     callSid,
     from,
-    to,
+    to: matchedNumber,
     normalizedTo: digits,
     locationId: phone.locationId,
     phoneNumberId: phone._id,

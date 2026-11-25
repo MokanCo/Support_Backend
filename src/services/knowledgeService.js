@@ -3,6 +3,9 @@ import Location from '../models/Location.js';
 import { AppError } from '../utils/AppError.js';
 import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
 import { recordAudit } from './receptionistAuditService.js';
+import { classifyFaqEntries, parseKnowledgeFile } from './faqMarkdown.js';
+
+export { splitImport } from './faqMarkdown.js';
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -144,50 +147,94 @@ export async function deleteKnowledge(id, user) {
   return { ok: true };
 }
 
-export function splitImport(text, filename) {
-  const source = String(text ?? '').trim();
-  if (!source) throw new AppError('Import text is empty', 400);
-  const blocks = source.split(/\n(?=(?:Q:|Question:)\s)/i).map((part) => part.trim()).filter(Boolean);
-  if (blocks.length <= 1) {
-    return [{ title: String(filename || 'Imported note').replace(/\.(txt|md)$/i, '').slice(0, 180), body: source.slice(0, 20000) }];
-  }
-  return blocks.slice(0, 50).map((block) => {
-    const lines = block.split('\n');
-    const title = lines[0].replace(/^(?:Q:|Question:)\s*/i, '').trim().slice(0, 180);
-    const body = lines.slice(1).join('\n').replace(/^(?:A:|Answer:)\s*/i, '').trim().slice(0, 20000);
-    return { title: title || 'Imported question', body: body || title };
+async function existingMatches(entries, locationId) {
+  const titles = [...new Set(entries.map((entry) => String(entry.title || '').trim()).filter(Boolean))];
+  if (!titles.length) return [];
+  const docs = await KnowledgeEntry.find({ title: { $in: titles } })
+    .collation({ locale: 'en', strength: 2 })
+    .select('title scope locationId')
+    .lean();
+  return docs.map((doc) => ({
+    title: doc.title,
+    scope: doc.scope,
+    locationId: doc.locationId ? String(doc.locationId) : null,
+  }));
+}
+
+function assertLegacyImport(input, kind) {
+  if (kind !== 'legacy') return;
+  if (!KNOWLEDGE_CATEGORIES.includes(input.category)) throw new AppError('category is invalid', 400);
+  if (!['global', 'branch'].includes(input.scope)) throw new AppError('scope must be global or branch', 400);
+}
+
+export async function previewKnowledgeImport(input) {
+  const source = String(input.text ?? '');
+  if (!source.trim()) throw new AppError('Import text is empty', 400);
+  if (input.locationId) await requireBranch(input.locationId);
+  const parsed = parseKnowledgeFile(source, input.filename);
+  const existing = await existingMatches(parsed.entries, input.locationId);
+  return classifyFaqEntries(parsed.entries, {
+    kind: parsed.kind === 'legacy' ? 'legacy' : 'faq',
+    locationId: input.locationId || null,
+    fallbackCategory: input.category,
+    fallbackScope: input.scope,
+    existing,
+    parseError: parsed.parseError,
   });
 }
 
 export async function importKnowledge(input, user) {
-  const category = input.category;
-  const scope = input.scope;
-  if (!KNOWLEDGE_CATEGORIES.includes(category)) throw new AppError('category is invalid', 400);
-  if (!['global', 'branch'].includes(scope)) throw new AppError('scope must be global or branch', 400);
-  let locationId = null;
-  let branchName = '';
-  if (scope === 'branch') {
-    const location = await requireBranch(input.locationId);
-    locationId = location._id;
-    branchName = location.name;
-  }
-  const pieces = splitImport(input.text, input.filename);
+  const source = String(input.text ?? '');
+  if (!source.trim()) throw new AppError('Import text is empty', 400);
+  const parsed = parseKnowledgeFile(source, input.filename);
+  assertLegacyImport(input, parsed.kind);
+  if (parsed.kind === 'legacy' && input.scope === 'branch') await requireBranch(input.locationId);
+  const preview = await previewKnowledgeImport(input);
+  if (preview.parseError && preview.total === 0) throw new AppError(preview.parseError, 400);
   const created = [];
-  for (const piece of pieces) {
-    // eslint-disable-next-line no-await-in-loop
-    const doc = await KnowledgeEntry.create({
-      title: piece.title,
-      body: piece.body,
-      category,
-      scope,
-      locationId,
-      approved: true,
-      updatedBy: user?.id ?? null,
-    });
-    created.push(format(doc, branchName));
+  const failed = [];
+  for (const entry of preview.entries) {
+    if (!entry.valid) continue;
+    try {
+      // Reuse the single-entry validation, scope rules, and audit trail.
+      // eslint-disable-next-line no-await-in-loop
+      const saved = await createKnowledge(
+        {
+          title: entry.title,
+          body: entry.body,
+          category: entry.category,
+          scope: entry.scope,
+          locationId: entry.scope === 'branch' ? input.locationId : null,
+        },
+        user,
+      );
+      created.push(saved);
+    } catch (error) {
+      failed.push({
+        index: entry.index,
+        title: entry.title,
+        error: error instanceof Error ? error.message : 'Could not save this entry',
+      });
+    }
   }
+  const locationId = input.locationId || null;
   await recordAudit(user, 'import', 'knowledge', '', locationId);
-  return { imported: created.length, entries: created };
+  return {
+    imported: created.length,
+    created: created.length,
+    skipped: preview.entries
+      .filter((entry) => entry.errors.length > 0)
+      .map((entry) => ({ index: entry.index, title: entry.title, errors: entry.errors })),
+    duplicates: preview.entries
+      .filter((entry) => entry.duplicate && entry.errors.length === 0)
+      .map((entry) => ({
+        index: entry.index,
+        title: entry.title,
+        reason: entry.duplicateOf === 'file' ? 'Repeated in this file' : 'Already in the knowledge base',
+      })),
+    failed,
+    entries: created,
+  };
 }
 
 export async function approvedEntriesForBranch(locationId) {
