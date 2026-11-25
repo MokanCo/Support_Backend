@@ -21,21 +21,6 @@ const swaggerDefinition = {
   tags: [
     { name: 'Auth', description: 'Login, logout, and current user' },
     { name: 'Locations', description: 'Locations (organizations)' },
-    {
-      name: 'Phone Numbers',
-      description:
-        'AI Receptionist phone configuration for existing branches. Does not change carrier routing.',
-    },
-    { name: 'AI Receptionist – Overview', description: 'Dashboard metrics from stored receptionist calls' },
-    { name: 'AI Agent', description: 'Voice and conversation settings' },
-    { name: 'Knowledge Base', description: 'Approved answers for the receptionist' },
-    { name: 'Branches', description: 'Receptionist details joined to existing locations' },
-    { name: 'Call History', description: 'Stored calls, transcripts, and resolution' },
-    { name: 'Recordings & Transcripts', description: 'Private recordings and transcripts' },
-    { name: 'Analytics', description: 'Metrics calculated from stored calls' },
-    { name: 'Telephony', description: 'Call transfer callbacks. Does not change carrier routing.' },
-    { name: 'System Settings', description: 'Non-secret receptionist settings and health' },
-    { name: 'Webhooks', description: 'Bandwidth voice webhooks. HTTP Basic auth required. No portal JWT.' },
     { name: 'Users', description: 'User management (admin only)' },
     { name: 'Tickets', description: 'Support tickets' },
     { name: 'Ticket internal notes', description: 'Staff-only notes on tickets (admin & support)' },
