@@ -69,10 +69,26 @@ async function findPhoneByNumber(value) {
   return BranchPhoneNumber.findOne({ normalizedNumber: { $in: candidates } });
 }
 
+async function findByAiDestination(value) {
+  const candidates = digitCandidates(value);
+  if (!candidates.length) return null;
+  const matches = await BranchPhoneNumber.find({ normalizedAiDestination: { $in: candidates } });
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    console.warn('[voice] inbound destination matched multiple branches', {
+      to: candidates[0],
+      count: matches.length,
+    });
+  }
+  return null;
+}
+
 async function findInboundPhone(body) {
   const landline = await findPhoneByNumber(diversionLandline(body));
   if (landline) return landline;
-  return findPhoneByNumber(body?.to);
+  const direct = await findPhoneByNumber(body?.to);
+  if (direct) return direct;
+  return findByAiDestination(body?.to);
 }
 
 function toE164(number) {
@@ -134,6 +150,11 @@ export async function handleInbound(body) {
   const agent = await getEffectiveAgent(phone?.locationId);
 
   if (!phone) {
+    console.warn('[voice] inbound number not matched', {
+      callId: callSid,
+      to: normalizePhoneDigits(to),
+      divertedFrom: normalizePhoneDigits(diversionLandline(body)),
+    });
     await ReceptionistCall.create({
       callSid,
       from,
@@ -149,7 +170,7 @@ export async function handleInbound(body) {
     return hangup('This number is not set up with the receptionist.');
   }
 
-  const aiOn = Boolean(phone.aiEnabled && agent.aiEnabled);
+  const aiOn = Boolean(phone.aiEnabled && agent.aiEnabled && phone.normalizedAiDestination);
   const call = await ReceptionistCall.create({
     callSid,
     from,
@@ -161,6 +182,13 @@ export async function handleInbound(body) {
     handling: aiOn ? 'ai' : 'human',
     outcome: 'in_progress',
     recordingDisclosed: Boolean(settings.recordingEnabled && aiOn),
+  });
+
+  console.info('[voice] inbound accepted', {
+    callId: callSid,
+    locationId: String(phone.locationId || ''),
+    from: normalizePhoneDigits(from),
+    ai: aiOn,
   });
 
   if (!aiOn) {

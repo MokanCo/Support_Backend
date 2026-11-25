@@ -24,8 +24,9 @@ router.use(roleMiddleware(['admin']));
  *     description: >
  *       Admin only. Returns receptionist phone configuration records.
  *       These records do not change Location.phone and do not change carrier routing.
- *       Results are paginated. Search matches the configured number, fallback, transfer number,
+ *       Results are paginated. Search matches the public number, AI destination number, fallback, transfer number,
  *       provider label, and branch name. Sort fields are createdAt, updatedAt, existingPhoneNumber, and aiEnabled.
+ *       Pass locationId to list one branch. The response includes existingPhoneNumber and aiDestinationNumber.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -97,9 +98,10 @@ router.use(roleMiddleware(['admin']));
  *     tags: [Phone Numbers]
  *     summary: Add a branch phone configuration
  *     description: >
- *       Admin only. Stores how an existing branch number should be handled later.
- *       If existingPhoneNumber is omitted, the location's current phone is copied into this record.
- *       Location.phone is not updated. routingLive true is rejected. No carrier change is made.
+ *       Admin only. Stores the public franchise number separately from the Bandwidth AI destination.
+ *       If existingPhoneNumber is omitted, the location's current phone is copied into this record and is not replaced by the Bandwidth number.
+ *       Numbers are stored in E.164. Location.phone is not updated. routingLive true is rejected.
+ *       Saving forwarding does not configure the external carrier.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -119,19 +121,21 @@ router.use(roleMiddleware(['admin']));
  *             $ref: '#/components/schemas/BranchPhoneNumberWrite'
  *           example:
  *             locationId: 507f1f77bcf86cd799439011
- *             existingPhoneNumber: "+1-555-0100"
+ *             existingPhoneNumber: "+13132304482"
+ *             aiDestinationNumber: "+13376040529"
  *             provider: existing_carrier
  *             aiEnabled: false
  *             businessHours:
  *               timezone: America/New_York
  *               schedule:
  *                 - { day: mon, closed: false, open: "08:00", close: "18:00" }
- *             humanFallbackNumber: "+1-555-0199"
- *             transferNumber: "+1-555-0198"
+ *             humanFallbackNumber: "+13137795461"
+ *             transferNumber: "+13137795461"
  *             forwarding:
- *               mode: none
- *               destination: ""
- *               notes: ""
+ *               mode: forward
+ *               status: pending
+ *               destination: "+13376040529"
+ *               notes: "Ask the carrier to forward the public number. Saving this does not enable it."
  *               routingLive: false
  *     responses:
  *       201:

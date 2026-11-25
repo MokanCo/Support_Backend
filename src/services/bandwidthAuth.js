@@ -40,17 +40,38 @@ export function bandwidthWebhooksReady() {
   );
 }
 
-export function validateBandwidthRequest(req) {
+function safeEqual(leftValue, rightValue) {
+  const left = Buffer.from(String(leftValue));
+  const right = Buffer.from(String(rightValue));
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function basicCredentials(header) {
+  const match = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(String(header || '').trim());
+  if (!match) return null;
+  const decoded = Buffer.from(match[1], 'base64').toString('utf8');
+  const split = decoded.indexOf(':');
+  if (split < 0) return null;
+  return { user: decoded.slice(0, split), pass: decoded.slice(split + 1) };
+}
+
+export function bandwidthRejectionReason(req) {
   const user = process.env.BANDWIDTH_WEBHOOK_USERNAME || '';
   const pass = process.env.BANDWIDTH_WEBHOOK_PASSWORD || '';
   const base = process.env.API_PUBLIC_URL || '';
-  if (!user || !pass || !base.startsWith('https://')) return false;
-  const header = String(req.get('Authorization') || '');
-  const expected = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
-  const left = Buffer.from(header);
-  const right = Buffer.from(expected);
-  if (left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
+  if (!user || !pass) return 'webhook_credentials_missing';
+  if (!base.startsWith('https://')) return 'public_url_not_https';
+  const header = req.get('Authorization') || '';
+  if (!String(header).trim()) return 'authorization_missing';
+  const supplied = basicCredentials(header);
+  if (!supplied) return 'authorization_not_basic';
+  if (!safeEqual(supplied.user, user) || !safeEqual(supplied.pass, pass)) return 'authorization_mismatch';
+  return '';
+}
+
+export function validateBandwidthRequest(req) {
+  return bandwidthRejectionReason(req) === '';
 }
 
 export function bandwidthCallbackAuthAttributes(escapeXml) {

@@ -1,6 +1,6 @@
 import { body, param, query } from 'express-validator';
 import { MAX_TICKET_LIST_PAGE_SIZE } from '../constants/pagination.js';
-import { FORWARD_MODES, PHONE_PROVIDERS, WEEKDAYS } from '../models/BranchPhoneNumber.js';
+import { FORWARD_MODES, FORWARDING_STATUSES, PHONE_PROVIDERS, WEEKDAYS } from '../models/BranchPhoneNumber.js';
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -65,6 +65,9 @@ function forwardingValidator(value) {
   if (value.mode != null && !FORWARD_MODES.includes(value.mode)) {
     throw new Error('forwarding.mode is invalid');
   }
+  if (value.status != null && !FORWARDING_STATUSES.includes(value.status)) {
+    throw new Error('forwarding.status is invalid');
+  }
   if (value.destination != null && typeof value.destination !== 'string') {
     throw new Error('forwarding.destination must be a string');
   }
@@ -76,6 +79,7 @@ function forwardingValidator(value) {
 
 const writeFields = [
   body('existingPhoneNumber').optional().isString().trim().isLength({ max: 30 }),
+  body('aiDestinationNumber').optional().isString().trim().isLength({ max: 30 }),
   body('provider').optional().isIn(PHONE_PROVIDERS).withMessage('provider is invalid'),
   body('providerLabel').optional().isString().isLength({ max: 80 }),
   body('aiEnabled')
