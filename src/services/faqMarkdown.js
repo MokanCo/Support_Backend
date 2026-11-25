@@ -53,10 +53,20 @@ const SCOPE_KEYS = new Map([
 
 function cleanInline(value) {
   return String(value ?? '')
+    .replace(/\u00a0/g, ' ')
     .replace(/\*\*/g, '')
     .replace(/__/g, '')
     .replace(/`/g, '')
+    .replace(/\\+\s*$/, '')
     .trim();
+}
+
+function prepareLine(raw) {
+  return cleanInline(String(raw ?? '').trim());
+}
+
+function headingLabel(text) {
+  return text.replace(/^\d+[.)]\s+/, '').trim();
 }
 
 function normalizeKey(value) {
@@ -136,7 +146,7 @@ function materialize(block) {
   const title = String(block.title ?? '').trim().replace(/\s+/g, ' ');
   const body = block.body.join('\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   const questionHeading = /\?\s*$/.test(title);
-  if (!block.sawField && !body && !questionHeading) return null;
+  if (!block.sawField && !questionHeading) return null;
 
   let category = null;
   let categoryRecognized = false;
@@ -183,7 +193,7 @@ export function parseFaqMarkdown(text) {
   };
 
   for (const raw of lines) {
-    const line = raw.trim();
+    const line = prepareLine(raw);
     if (line.startsWith('```')) {
       inFence = !inFence;
       continue;
@@ -193,14 +203,14 @@ export function parseFaqMarkdown(text) {
       if (block?.activeField === 'answer' && block.body.length) block.body.push('');
       continue;
     }
-    if (/^(?:---|\*\*\*|___)\s*$/.test(line)) {
+    if (/^(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       flush();
       continue;
     }
 
     const heading = /^(#{1,6})\s+(.+?)\s*#*$/.exec(line);
     if (heading) {
-      const text = cleanInline(heading[2]).replace(/\s+/g, ' ');
+      const text = headingLabel(cleanInline(heading[2]).replace(/\s+/g, ' '));
       const labeled = matchFieldLine(text);
       if (labeled?.field) {
         if (!block) block = freshBlock('', inheritedCategory, inheritedScope);
@@ -248,7 +258,6 @@ export function parseFaqMarkdown(text) {
     }
     if (block && (block.inheritedCategory || block.sawField || /\?\s*$/.test(block.title))) {
       block.body.push(line);
-      block.sawField = true;
     }
   }
 

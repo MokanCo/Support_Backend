@@ -25,6 +25,22 @@ export function emitUserNotification(userId, notification) {
 }
 
 /**
+ * Tell connected admins that a new inbound SMS was stored.
+ * @param {Record<string, unknown>} message
+ */
+export async function emitSmsInbound(message, lookupAdmins) {
+  if (!io || !message) return;
+  const admins = lookupAdmins
+    ? await lookupAdmins()
+    : await User.find({ role: 'admin', isDisabled: { $ne: true } }).select('_id').lean();
+  const payload = { message };
+  for (const admin of admins) {
+    const userId = admin && typeof admin === 'object' ? admin._id : admin;
+    io.to(`user:${String(userId)}`).emit('sms:inbound', payload);
+  }
+}
+
+/**
  * Push updated chat header (assignee / support team) to everyone in the ticket room.
  * @param {string|import('mongoose').Types.ObjectId} ticketId
  */

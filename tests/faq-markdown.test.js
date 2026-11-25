@@ -135,6 +135,24 @@ Last price change was in May.
     assert.match(entries[0].body, /May/);
   });
 
+  it('ignores markdown hard line breaks on category and title lines', () => {
+    const entries = parseFaqMarkdown(`### Entry 1
+
+**Title:** What is Moka & Co.?\\
+**Approved answer:** Moka & Co. is a restaurant brand with multiple
+locations. How can I help you today?\\
+**Category:** Company information\\
+**Scope:** Global
+`);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].title, 'What is Moka & Co.?');
+    assert.equal(entries[0].category, 'Company information');
+    assert.equal(entries[0].categoryRecognized, true);
+    assert.equal(entries[0].scope, 'global');
+    assert.equal(entries[0].body.includes('\\'), false);
+    assert.match(entries[0].body, /multiple/);
+  });
+
   it('keeps an entry that is missing its approved answer', () => {
     const entries = parseFaqMarkdown(`### What is the wifi password?
 

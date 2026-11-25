@@ -20,6 +20,7 @@ import { handleStripeWebhookEvent } from './services/ar/arStripeService.js';
 import phoneNumberRoutes from './routes/phoneNumberRoutes.js';
 import receptionistApiRoutes from './routes/receptionistApiRoutes.js';
 import voiceRoutes from './routes/voiceRoutes.js';
+import smsRoutes from './routes/smsRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { mountSwagger } from './config/swagger.js';
 import { getMailConfigStatus, verifyMailConnection } from './services/mailSender.js';
@@ -101,6 +102,7 @@ app.use('/api/ar', arRoutes);
 app.use('/api/public', arPublicRoutes);
 app.use('/api/ai-receptionist/phone-numbers', phoneNumberRoutes);
 app.use('/api/ai-receptionist/voice', voiceRoutes);
+app.use('/api/ai-receptionist/sms', smsRoutes);
 app.use('/api/ai-receptionist', receptionistApiRoutes);
 app.use('/api', boardApiRoutes);
 
