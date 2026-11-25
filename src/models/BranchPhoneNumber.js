@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 export const PHONE_PROVIDERS = [
   'unknown',
   'existing_carrier',
+  'ptcl',
   'forwarded',
   'sip',
   'bandwidth',
@@ -10,6 +11,7 @@ export const PHONE_PROVIDERS = [
   'other',
 ];
 export const FORWARD_MODES = ['none', 'forward', 'sip', 'manual'];
+export const FORWARDING_STATUSES = ['not_configured', 'pending', 'active'];
 export const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 export const TEST_RESULTS = ['not_run', 'unavailable', 'invalid'];
 
@@ -65,8 +67,13 @@ const scheduleRowSchema = new mongoose.Schema(
  *       properties:
  *         mode:
  *           type: string
+ *           description: Carrier forwarding, SIP forwarding, or manual notes. Saving this does not change the external carrier.
  *           enum: [none, forward, sip, manual]
  *           example: none
+ *         status:
+ *           type: string
+ *           enum: [not_configured, pending, active]
+ *           example: not_configured
  *         destination:
  *           type: string
  *           description: Required for mode forward (10–15 digits) and mode sip (sip:user@host). Cleared when mode is none.
@@ -92,11 +99,16 @@ const scheduleRowSchema = new mongoose.Schema(
  *         branchIsDisabled: { type: boolean, example: false }
  *         existingPhoneNumber:
  *           type: string
- *           description: Incoming number to keep using. Stored only on this configuration.
- *           example: "+1-555-0100"
+ *           description: Public franchise number customers dial. Stored only on this configuration. The location phone is not changed.
+ *           example: "+13132304482"
+ *         aiDestinationNumber:
+ *           type: string
+ *           description: Bandwidth number that receives the forwarded call, in E.164. Empty until configured.
+ *           example: "+13376040529"
  *         provider:
  *           type: string
- *           enum: [unknown, existing_carrier, forwarded, sip, bandwidth, twilio, other]
+ *           description: Carrier that owns the public franchise number.
+ *           enum: [unknown, existing_carrier, ptcl, forwarded, sip, bandwidth, twilio, other]
  *         providerLabel:
  *           type: string
  *           description: Required when provider is other. Otherwise empty.
@@ -130,7 +142,10 @@ const scheduleRowSchema = new mongoose.Schema(
  *           description: 10–15 digits. On create, defaults to the location phone when omitted.
  *         provider:
  *           type: string
- *           enum: [unknown, existing_carrier, forwarded, sip, bandwidth, twilio, other]
+ *           enum: [unknown, existing_carrier, ptcl, forwarded, sip, bandwidth, twilio, other]
+ *         aiDestinationNumber:
+ *           type: string
+ *           description: Optional Bandwidth destination, 10–15 digits, stored as E.164.
  *         providerLabel: { type: string, maxLength: 80 }
  *         aiEnabled: { type: boolean }
  *         businessHours:
@@ -173,6 +188,8 @@ const branchPhoneNumberSchema = new mongoose.Schema(
     },
     existingPhoneNumber: { type: String, required: true, trim: true },
     normalizedNumber: { type: String, required: true, unique: true },
+    aiDestinationNumber: { type: String, default: '', trim: true },
+    normalizedAiDestination: { type: String, default: '', trim: true },
     provider: { type: String, enum: PHONE_PROVIDERS, default: 'unknown' },
     providerLabel: { type: String, default: '', trim: true, maxlength: 80 },
     aiEnabled: { type: Boolean, default: false },
@@ -184,6 +201,7 @@ const branchPhoneNumberSchema = new mongoose.Schema(
     transferNumber: { type: String, default: '', trim: true },
     forwarding: {
       mode: { type: String, enum: FORWARD_MODES, default: 'none' },
+      status: { type: String, enum: FORWARDING_STATUSES, default: 'not_configured' },
       destination: { type: String, default: '', trim: true },
       notes: { type: String, default: '', maxlength: 500 },
       routingLive: { type: Boolean, default: false },
@@ -199,5 +217,6 @@ const branchPhoneNumberSchema = new mongoose.Schema(
 );
 
 branchPhoneNumberSchema.index({ locationId: 1, createdAt: -1 });
+branchPhoneNumberSchema.index({ normalizedAiDestination: 1 });
 
 export default mongoose.model('BranchPhoneNumber', branchPhoneNumberSchema, 'branch_phone_numbers');

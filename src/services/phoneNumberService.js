@@ -1,5 +1,6 @@
 import BranchPhoneNumber, {
   FORWARD_MODES,
+  FORWARDING_STATUSES,
   PHONE_PROVIDERS,
   WEEKDAYS,
 } from '../models/BranchPhoneNumber.js';
@@ -26,7 +27,8 @@ function requirePhone(value, label) {
   if (!raw || digits.length < 10 || digits.length > 15) {
     throw new AppError(`${label} must contain 10 to 15 digits`, 400);
   }
-  return { raw, digits };
+  const e164 = digits.length === 10 ? `+1${digits}` : `+${digits}`;
+  return { raw: e164, digits: normalizePhoneDigits(e164) };
 }
 
 function optionalPhone(value, label) {
@@ -97,7 +99,14 @@ function applyForwarding(input) {
   }
   let destination = String(source.destination ?? '').trim();
   const notes = String(source.notes ?? '').trim().slice(0, 500);
-  if (mode === 'none') destination = '';
+  let status = source.status ?? (mode === 'none' ? 'not_configured' : 'pending');
+  if (mode === 'none') {
+    destination = '';
+    status = 'not_configured';
+  }
+  if (!FORWARDING_STATUSES.includes(status)) {
+    throw new AppError('forwarding.status is invalid', 400);
+  }
   if (mode === 'forward') {
     destination = requirePhone(destination, 'Forwarding destination').raw;
   }
@@ -109,7 +118,13 @@ function applyForwarding(input) {
   if (mode === 'manual' && destination.length > 120) {
     throw new AppError('Forwarding destination is too long', 400);
   }
-  return { mode, destination, notes, routingLive: false };
+  return { mode, status, destination, notes, routingLive: false };
+}
+
+function applyAiDestination(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return { raw: '', digits: '' };
+  return requirePhone(raw, 'AI destination number');
 }
 
 function formatPhoneNumber(doc, location) {
@@ -123,6 +138,7 @@ function formatPhoneNumber(doc, location) {
     branchPhone: location?.phone ?? '',
     branchIsDisabled: Boolean(location?.isDisabled),
     existingPhoneNumber: row.existingPhoneNumber,
+    aiDestinationNumber: row.aiDestinationNumber ?? '',
     provider: row.provider,
     providerLabel: row.providerLabel ?? '',
     aiEnabled: Boolean(row.aiEnabled),
@@ -142,6 +158,7 @@ function formatPhoneNumber(doc, location) {
     transferNumber: row.transferNumber ?? '',
     forwarding: {
       mode: forwarding.mode || 'none',
+      status: forwarding.status || 'not_configured',
       destination: forwarding.destination ?? '',
       notes: forwarding.notes ?? '',
       routingLive: false,
@@ -191,6 +208,7 @@ export async function listPhoneNumbers(query) {
     const matchedLocations = await Location.find({ name: rx }).select('_id').lean();
     filter.$or = [
       { existingPhoneNumber: rx },
+      { aiDestinationNumber: rx },
       { humanFallbackNumber: rx },
       { transferNumber: rx },
       { providerLabel: rx },
@@ -227,14 +245,17 @@ export async function getPhoneNumber(id) {
 export async function createPhoneNumber(input, user) {
   const location = await requireLocation(input.locationId);
   const sourceNumber = String(input.existingPhoneNumber ?? '').trim() || location.phone;
-  const { raw, digits } = requirePhone(sourceNumber, 'Existing phone number');
+  const { raw, digits } = requirePhone(sourceNumber, 'Public branch number');
   const duplicate = await BranchPhoneNumber.findOne({ normalizedNumber: digits }).select('_id');
   if (duplicate) throw new AppError('This phone number is already configured', 409);
+  const destination = applyAiDestination(input.aiDestinationNumber);
 
   const doc = await BranchPhoneNumber.create({
     locationId: location._id,
     existingPhoneNumber: raw,
     normalizedNumber: digits,
+    aiDestinationNumber: destination.raw,
+    normalizedAiDestination: destination.digits,
     ...applyProvider(input),
     aiEnabled: Boolean(input.aiEnabled),
     businessHours: applyHours(input.businessHours),
@@ -258,7 +279,7 @@ export async function updatePhoneNumber(id, input, user) {
   if (input.existingPhoneNumber !== undefined || input.locationId !== undefined) {
     const sourceNumber =
       input.existingPhoneNumber !== undefined ? input.existingPhoneNumber : doc.existingPhoneNumber;
-    const { raw, digits } = requirePhone(sourceNumber, 'Existing phone number');
+    const { raw, digits } = requirePhone(sourceNumber, 'Public branch number');
     const duplicate = await BranchPhoneNumber.findOne({
       normalizedNumber: digits,
       _id: { $ne: doc._id },
@@ -276,6 +297,11 @@ export async function updatePhoneNumber(id, input, user) {
     });
     doc.provider = next.provider;
     doc.providerLabel = next.providerLabel;
+  }
+  if (input.aiDestinationNumber !== undefined) {
+    const destination = applyAiDestination(input.aiDestinationNumber);
+    doc.aiDestinationNumber = destination.raw;
+    doc.normalizedAiDestination = destination.digits;
   }
   if (input.aiEnabled !== undefined) doc.aiEnabled = Boolean(input.aiEnabled);
   if (input.businessHours !== undefined) doc.businessHours = applyHours(input.businessHours);

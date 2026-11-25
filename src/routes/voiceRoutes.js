@@ -1,19 +1,41 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { validateBandwidthRequest } from '../services/bandwidthAuth.js';
+import { bandwidthRejectionReason } from '../services/bandwidthAuth.js';
 import * as telephony from '../services/telephonyService.js';
 
 const router = Router();
+const UNAVAILABLE_BXML = '<?xml version="1.0" encoding="UTF-8"?><Response><SpeakSentence voice="julie">This line is not available.</SpeakSentence><Hangup/></Response>';
 
 function requireBandwidth(req, res, next) {
-  if (!validateBandwidthRequest(req)) {
-    res
-      .status(403)
-      .type('text/xml')
-      .send('<?xml version="1.0" encoding="UTF-8"?><Response><SpeakSentence voice="julie">This line is not available.</SpeakSentence><Hangup/></Response>');
+  const reason = bandwidthRejectionReason(req);
+  if (reason) {
+    console.warn('[voice] webhook rejected', {
+      reason,
+      path: req.originalUrl,
+      hasAuthorization: Boolean(req.get('Authorization')),
+    });
+    res.status(403).type('text/xml').send(UNAVAILABLE_BXML);
     return;
   }
   next();
+}
+
+function voiceHandler(fn) {
+  return asyncHandler(async (req, res) => {
+    try {
+      await fn(req, res);
+    } catch (error) {
+      console.error('[voice] webhook failed', {
+        path: req.originalUrl,
+        eventType: req.body?.eventType || '',
+        callId: req.body?.callId || '',
+        message: error instanceof Error ? error.message : 'unknown error',
+      });
+      if (!res.headersSent) {
+        res.status(200).type('text/xml').send(UNAVAILABLE_BXML);
+      }
+    }
+  });
 }
 
 /**
@@ -24,8 +46,9 @@ function requireBandwidth(req, res, next) {
  *     summary: Inbound call webhook
  *     description: >
  *       Bandwidth voice application callback. HTTP Basic auth is required. No portal JWT.
- *       The called number selects the branch configuration. AI answers only when both the number and the agent setting are enabled.
- *       Otherwise the call is transferred to the saved branch number.
+ *       The called Bandwidth number is matched to aiDestinationNumber. When the carrier includes the original franchise number, that public number is matched first so one Bandwidth number can serve several branches.
+ *       AI answers only when the branch has AI enabled, an AI destination number saved, and the agent setting enabled.
+ *       Otherwise the call is transferred to the saved staff number. The original caller number is kept.
  *       Order and payment requests are refused and offered a transfer. Point the Bandwidth voice application at this URL.
  *     parameters:
  *       - in: header
@@ -55,7 +78,7 @@ function requireBandwidth(req, res, next) {
  *       403:
  *         description: Missing telephony configuration or invalid signature
  */
-router.post('/inbound', requireBandwidth, asyncHandler(async (req, res) => {
+router.post('/inbound', requireBandwidth, voiceHandler(async (req, res) => {
   const event = String(req.body?.eventType || 'initiate');
   if (event === 'disconnect') {
     await telephony.handleCallStatus(req.body);
