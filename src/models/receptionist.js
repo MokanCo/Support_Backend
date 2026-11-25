@@ -237,6 +237,74 @@ export const ReceptionistAudit = mongoose.model('ReceptionistAudit', auditSchema
  *         branchName: { type: string }
  *         approved: { type: boolean, example: true }
  *         updatedAt: { type: string, format: date-time }
+ *     KnowledgeImportEntry:
+ *       type: object
+ *       properties:
+ *         index: { type: integer }
+ *         title: { type: string }
+ *         body: { type: string, description: Approved answer }
+ *         category: { type: string }
+ *         scope: { type: string, enum: [global, branch, ''] }
+ *         valid: { type: boolean }
+ *         duplicate: { type: boolean }
+ *         duplicateOf: { type: string, nullable: true, enum: [file, database] }
+ *         errors:
+ *           type: array
+ *           items: { type: string }
+ *     KnowledgeImportPreview:
+ *       type: object
+ *       properties:
+ *         kind: { type: string, enum: [faq, legacy] }
+ *         parseError: { type: string }
+ *         total: { type: integer, description: Entries detected }
+ *         valid: { type: integer }
+ *         invalid: { type: integer }
+ *         duplicates: { type: integer }
+ *         byCategory:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               category: { type: string }
+ *               total: { type: integer }
+ *               valid: { type: integer }
+ *         entries:
+ *           type: array
+ *           items: { $ref: '#/components/schemas/KnowledgeImportEntry' }
+ *     KnowledgeImportResult:
+ *       type: object
+ *       properties:
+ *         imported: { type: integer, description: Same as created. Kept for existing clients. }
+ *         created: { type: integer, description: Records created }
+ *         skipped:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               index: { type: integer }
+ *               title: { type: string }
+ *               errors:
+ *                 type: array
+ *                 items: { type: string }
+ *         duplicates:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               index: { type: integer }
+ *               title: { type: string }
+ *               reason: { type: string }
+ *         failed:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               index: { type: integer }
+ *               title: { type: string }
+ *               error: { type: string }
+ *         entries:
+ *           type: array
+ *           items: { $ref: '#/components/schemas/KnowledgeEntry' }
  *     BranchReceptionistProfile:
  *       type: object
  *       properties:
