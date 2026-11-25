@@ -36,6 +36,11 @@ const swaggerDefinition = {
     { name: 'Telephony', description: 'Call transfer callbacks. Does not change carrier routing.' },
     { name: 'System Settings', description: 'Non-secret receptionist settings and health' },
     { name: 'Webhooks', description: 'Bandwidth voice webhooks. HTTP Basic auth required. No portal JWT.' },
+    {
+      name: 'SMS',
+      description:
+        'Bandwidth inbound SMS. The webhook uses messaging callback credentials. Portal routes require an admin JWT.',
+    },
     { name: 'Users', description: 'User management (admin only)' },
     { name: 'Tickets', description: 'Support tickets' },
     { name: 'Ticket internal notes', description: 'Staff-only notes on tickets (admin & support)' },
